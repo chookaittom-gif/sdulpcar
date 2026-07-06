@@ -14,6 +14,7 @@ const MAX_COLS          = 22;
 const CACHE_SEC         = 120;
 const TZ                = 'Asia/Bangkok';
 const SHEET_VEHICLE_STATUS = 'VehicleStatus';
+const INITIAL_DATA_CACHE_KEY = 'mainDataCache_v13_BerryFix';
 
 const COLMAP = {
   // คงไว้เหมือนเดิม ไม่ต้องเอาคอลัมน์ของ Availability มาปนค่ะ
@@ -208,13 +209,161 @@ function _sheetApiApplyFormatsForRow_(sheet, rowNumber, formatSpecs) {
 
 // ===================== CORE FUNCTIONS =====================
 function doGet(e) {
-  const tpl = HtmlService.createTemplateFromFile('index');
-  
-  return tpl.evaluate()
+  var action = String((e && e.parameter && e.parameter.action) || '').trim();
+  if (!action) {
+    return _renderWebAppIndex_();
+  }
+  return _handleWebApiRequest_(e, 'GET');
+}
+
+function doPost(e) {
+  return _handleWebApiRequest_(e, 'POST');
+}
+
+function _renderWebAppIndex_() {
+  var content = HtmlService.createHtmlOutputFromFile('index').getContent();
+  content = content.replace(
+    '<link rel="stylesheet" href="./style.css">',
+    include_('Style')
+  );
+  content = content.replace(
+    '        <script src="./config.js"></script>\n        <script src="./gviz-service.js"></script>\n        <script src="./app.js"></script>',
+    include_('gviz-service') + '\n' + include_('JavaScript')
+  );
+
+  return HtmlService.createHtmlOutput(content)
     .setTitle('ระบบจองยานพาหนะ มหาวิทยาลัยสวนดุสิต ศูนย์การศึกษาลำปาง')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .addMetaTag('mobile-web-app-capable', 'yes')
     .setSandboxMode(HtmlService.SandboxMode.IFRAME);
+}
+
+function _handleWebApiRequest_(e, method) {
+  try {
+    var req = _parseWebApiRequest_(e, method);
+    if (!req.action) {
+      return _jsonOutput_({
+        ok: true,
+        data: {
+          status: 'ready',
+          service: 'sdulpcar-api',
+          method: method || 'GET'
+        }
+      });
+    }
+
+    var result = _dispatchWebApiAction_(req.action, req.payload);
+    return _jsonOutput_({ ok: true, data: result });
+  } catch (err) {
+    return _jsonOutput_({
+      ok: false,
+      error: (err && err.message) ? err.message : String(err || 'Unknown error')
+    });
+  }
+}
+
+function _parseWebApiRequest_(e, method) {
+  var params = (e && e.parameter) || {};
+  var action = String(params.action || '').trim();
+  var payload = undefined;
+
+  if (String(method || '').toUpperCase() === 'POST') {
+    var raw = (e && e.postData && e.postData.contents) ? String(e.postData.contents) : '';
+    if (raw) {
+      var parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        if (parsed.action != null) action = String(parsed.action).trim();
+        if (Object.prototype.hasOwnProperty.call(parsed, 'payload')) payload = parsed.payload;
+      } else {
+        payload = parsed;
+      }
+    }
+  }
+
+  if (payload === undefined && Object.prototype.hasOwnProperty.call(params, 'payload')) {
+    payload = _parseWebApiPayloadValue_(params.payload);
+  }
+
+  return { action: action, payload: payload };
+}
+
+function _parseWebApiPayloadValue_(raw) {
+  if (raw == null || raw === '') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    return raw;
+  }
+}
+
+function _dispatchWebApiAction_(action, payload) {
+  var actionMap = _getWebApiActionMap_();
+  var api = actionMap[action];
+  if (!api || typeof api !== 'function') {
+    throw new Error('Unknown action: ' + action + '. Supported actions: ' + Object.keys(actionMap).sort().join(', '));
+  }
+  return api(payload);
+}
+
+function _getWebApiActionMap_() {
+  return {
+    ping: ping,
+    selfTestEarlyClose_All: selfTestEarlyClose_All,
+    logoutUser: logoutUser,
+    verifyAdminLogin: verifyAdminLogin,
+    getWebAppInitialData: getWebAppInitialData,
+    clearInitialCache: clearInitialCache,
+    getById: getById,
+    apiGetAdminPanelData: apiGetAdminPanelData,
+    createBookingAndBroadcast: createBookingAndBroadcast,
+    checkPendingBookingOverlap: checkPendingBookingOverlap,
+    getAvailableVehicles: getAvailableVehicles,
+    apiUpdateBookingStatus: apiUpdateBookingStatus,
+    updateBookingStatus: updateBookingStatus,
+    apiUserCancelBooking: apiUserCancelBooking,
+    closeBookingActualEnd: closeBookingActualEnd,
+    specialApproveBooking: specialApproveBooking,
+    getRealTimeAvailableCount: getRealTimeAvailableCount,
+    apiGetBookingsByPhone: apiGetBookingsByPhone,
+    getVehicleList: getVehicleList,
+    getDriverList: getDriverList,
+    getTimelineData: getTimelineData,
+    apiGetFuelFormOptions: apiGetFuelFormOptions,
+    apiGetLiveStatus: apiGetLiveStatus,
+    apiGetLiveStatusForModal: function(payload) {
+      payload = payload || {};
+      return apiGetLiveStatusForModal(payload.resourceType, payload.resourceId);
+    },
+    apiGetFuelHistory: apiGetFuelHistory,
+    apiGetInsuranceHistory: apiGetInsuranceHistory,
+    apiGetMaintenanceHistory: apiGetMaintenanceHistory,
+    apiGetInsurancePlates: apiGetInsurancePlates,
+    apiGetMaintenancePlates: apiGetMaintenancePlates,
+    apiSaveFuel: apiSaveFuel,
+    apiSaveMaintenance: apiSaveMaintenance,
+    saveInsuranceRecord: saveInsuranceRecord,
+    saveMaintenanceRecord: saveMaintenanceRecord,
+    listInsuranceRecords: listInsuranceRecords,
+    listMaintenanceRecords: listMaintenanceRecords,
+    getDashboardFuelLevels: getDashboardFuelLevels,
+    apiRefreshDashboard: apiRefreshDashboard,
+    apiGenerateDashboardPdf: apiGenerateDashboardPdf,
+    apiGenerateFuelMonthlyPdf: apiGenerateFuelMonthlyPdf,
+    apiGenerateFuelDailyPdf: apiGenerateFuelDailyPdf,
+    apiGenerateInsuranceAnnualPdf: apiGenerateInsuranceAnnualPdf,
+    apiGenerateMaintenanceMonthlyPdf: apiGenerateMaintenanceMonthlyPdf,
+    apiToggleDriverStatus: apiToggleDriverStatus,
+    apiToggleVehicleStatus: apiToggleVehicleStatus,
+    createAvailabilityBlock: createAvailabilityBlock,
+    closeAvailabilityBlock: closeAvailabilityBlock,
+    saveMaintenanceAvailability: saveMaintenanceAvailability
+  };
+}
+
+function _jsonOutput_(payload) {
+  return ContentService
+    .createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 
@@ -226,7 +375,7 @@ function _probeHtmlTemplate_(name) {
   try {
     var tpl = HtmlService.createTemplateFromFile(name);
     var now = new Date();
-    var tz = Session.getScriptTimeZone() || 'Asia/Bangkok';
+    var tz = 'Asia/Bangkok';
 
     if (name === 'DashboardReport') {
       // ใส่ค่าจำลองให้ตรงกับที่ _defaultGenerateDashboardPdf_ ใช้
@@ -278,20 +427,34 @@ function getMainData() {
 }
 
 // ANCHOR: getMainData_
-function getMainData_() {
-  const CK = 'mainDataCache_v13_BerryFix'; 
-  const cached = cacheGet_(CK);
+function getMainData_(options) {
+  options = options || {};
+  const totalStart = Date.now();
+  const CK = INITIAL_DATA_CACHE_KEY; 
+  const forceRefresh = options.forceRefresh === true || options.skipCache === true;
+  
+  const cacheReadStart = Date.now();
+  const cached = forceRefresh ? null : cacheGetLarge_(CK);
+  const cacheReadTime = Date.now() - cacheReadStart;
+  
   if (cached) {
-    // รองรับ cache ทั้ง 2 รูปแบบ:
-    // 1) payload เต็ม { ok, data }
-    // 2) data ตรง ๆ (legacy)
+    Logger.log('CACHE HIT key=' + CK + ' readMs=' + cacheReadTime + ' totalMs=' + (Date.now() - totalStart));
+    Logger.log('[Timing] Cache Read Hit: ' + cacheReadTime + ' ms (total: ' + (Date.now() - totalStart) + ' ms)');
     if (cached && typeof cached === 'object' && cached.ok === true && cached.data) {
       return cached;
     }
     return { ok:true, data:cached };
   }
+  Logger.log('CACHE MISS key=' + CK + (forceRefresh ? ' reason=forceRefresh' : '') + ' readMs=' + cacheReadTime);
+  Logger.log('[Timing] Cache Read Miss: ' + cacheReadTime + ' ms');
   
   try {
+    const settingsStart = Date.now();
+    const settings = readAllSettings_();
+    const settingsTime = Date.now() - settingsStart;
+    Logger.log('[Timing] Read Settings Sheet: ' + settingsTime + ' ms');
+
+    const sheetReadStart = Date.now();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sh = ss.getSheetByName(SHEET_MAIN_NAME); 
     if (!sh) throw new Error("ไม่พบชีต 'Data' ค่ะ!");
@@ -353,11 +516,17 @@ function getMainData_() {
       Logger.log('getMainData_ data read fallback to getValues: ' + (sheetApiErr && sheetApiErr.message ? sheetApiErr.message : sheetApiErr));
       values = sh.getRange(startRow, 1, numRows, headers.length).getValues();
     }
-    const seen = new Set(); 
+    const sheetReadTime = Date.now() - sheetReadStart;
+    Logger.log('[Timing] Read Sheets (Data): ' + sheetReadTime + ' ms');
     
     // 🍓 BERRY FIX: อ่าน Actual Ends Map ก่อน Map Bookings (แก้เป็น getActualEndsMap ไม่มี _)
+    const actualEndStart = Date.now();
     const actualEndsMap = getActualEndsMap();
+    const actualEndTime = Date.now() - actualEndStart;
+    Logger.log('[Timing] Read Sheets (BookingActualEnd): ' + actualEndTime + ' ms');
 
+    const buildBookingsStart = Date.now();
+    const seen = new Set(); 
     const recentBookingsData = values.map((row, i) => {
       const id = String(row[idx.bookingId] || '').trim();
       if (!id || seen.has(id)) return null;
@@ -423,8 +592,11 @@ function getMainData_() {
       const bNum = parseInt(b.bookingId) || 0;
       return bNum - aNum; 
     });
+    const buildBookingsTime = Date.now() - buildBookingsStart;
+    Logger.log('[Timing] Build Bookings (normalize/sort): ' + buildBookingsTime + ' ms');
 
     // 🍓 [BERRY FIX] Merge Availability Blocks into Calendar (Data UI Safe)
+    const buildCalendarStart = Date.now();
     try {
        const shAvail = ss.getSheetByName('Availability');
        if(shAvail) {
@@ -434,6 +606,7 @@ function getMainData_() {
           const availSheetNameA1 = "'" + String(shAvail.getName()).replace(/'/g, "''") + "'";
           const availRangeA1 = availSheetNameA1 + '!A1:' + toA1Col_(availLastCol) + availLastRow;
           let avData = [];
+          const availReadStart = Date.now();
           try {
             const availResp = Sheets.Spreadsheets.Values.get(spreadsheetId, availRangeA1, {
               majorDimension: 'ROWS',
@@ -445,8 +618,37 @@ function getMainData_() {
             Logger.log('getMainData_ Availability read fallback to getValues: ' + (sheetApiErr && sheetApiErr.message ? sheetApiErr.message : sheetApiErr));
             avData = shAvail.getRange(1, 1, availLastRow, availLastCol).getValues();
           }
+          Logger.log('[Timing] Read Sheets (Availability): ' + (Date.now() - availReadStart) + ' ms');
+
           const header = avData[0] ||[];
           const col_assignedDriver = header.indexOf('assignedDriver');
+          const col_tripPhase = header.indexOf('tripPhase');
+          const col_closedBy = header.indexOf('closedBy');
+          const col_closedAt = header.indexOf('closedAt');
+          const col_closeNote = header.indexOf('closeNote');
+          const formatClosedAtForCalendar_ = function(v) {
+            if (!v) return { raw: '', text: '', iso: '' };
+            var tz = Session.getScriptTimeZone() || 'Asia/Bangkok';
+            var d = null;
+            if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+              d = v;
+            } else {
+              var n = Number(v);
+              if (isFinite(n) && String(v).trim().match(/^\d+(\.\d+)?$/)) {
+                d = new Date(Math.round((n - 25569) * 86400 * 1000));
+              } else if (typeof _parseAnyDateString_ === 'function') {
+                d = _parseAnyDateString_(v);
+              }
+            }
+            if (!d || isNaN(d.getTime())) return { raw: v, text: String(v), iso: String(v) };
+            return {
+              raw: v,
+              text: (typeof _fmtThaiDateTimeBE_ === 'function')
+                ? _fmtThaiDateTimeBE_(d)
+                : Utilities.formatDate(d, tz, 'dd/MM/yyyy HH:mm น.'),
+              iso: Utilities.formatDate(d, tz, "yyyy-MM-dd'T'HH:mm:ssXXX")
+            };
+          };
           
           for(let i=1; i<avData.length; i++) {
              const resType = String(avData[i][0] || '').trim();
@@ -454,9 +656,10 @@ function getMainData_() {
              const reason = String(avData[i][6] || '').trim();
              const isDriver = (resType === 'driver');
              const isRepair = reason.indexOf('ซ่อม') !== -1;
+             const tripPhase = (col_tripPhase > -1) ? String(avData[i][col_tripPhase] || '').trim().toLowerCase() : '';
              
              // 🍓 BERRY FIX: Skip driver_block if reason contains "ซ่อม"
-             if (isDriver && isRepair) {
+             if (isDriver && isRepair && tripPhase !== 'dropoff' && tripPhase !== 'pickup' && tripPhase !== 'pickup_support') {
                  continue; // ข้ามการสร้าง event ในปฏิทิน
              }
              
@@ -464,14 +667,35 @@ function getMainData_() {
              const col_status = header.indexOf('status');
              const blockStatus = (col_status > -1) ? String(avData[i][col_status] || '').trim().toLowerCase() : '';
              const isClosed = (blockStatus === 'closed');
-             
-             const assignedDriverValue = (col_assignedDriver > -1) ? avData[i][col_assignedDriver] : '';
+             const closedAtValue = (col_closedAt > -1) ? avData[i][col_closedAt] : '';
+             const closedAtInfo = formatClosedAtForCalendar_(closedAtValue);
+              
+              const assignedDriverValue = (col_assignedDriver > -1) ? avData[i][col_assignedDriver] : '';
+
+             // 🍓 FIX: detect isAllDay — raw time ว่าง/0/default ถือเป็น all-day จริง
+             const rawStartTime = avData[i][3];
+             const rawEndTime = avData[i][5];
+             const isRawTimeEmpty = function(v) {
+               if (v === null || v === undefined || v === '') return true;
+               if (typeof v === 'number' && v === 0) return true;
+               var sv = String(v).trim();
+               return !sv || sv === '0' || sv === '0.00' || sv === '0.0' || sv === '00:00';
+             };
+             const parsedStartTime = parseTimeSafe_(rawStartTime);
+             const parsedEndTime = parseTimeSafe_(rawEndTime);
+             const blockIsAllDay = isRawTimeEmpty(rawStartTime) && (isRawTimeEmpty(rawEndTime) || parsedEndTime === '23:59');
 
              sortedBookings.push({
                 bookingId: 'BLK-' + i,
                 status: isDriver ? 'driver_block' : 'vehicle_block',
                 blockStatus: blockStatus,
                 isClosed: isClosed,
+                closedBy: (col_closedBy > -1) ? String(avData[i][col_closedBy] || '').trim() : '',
+                closedAt: closedAtInfo.raw,
+                closedAtText: closedAtInfo.text,
+                closedAtISO: closedAtInfo.iso,
+                closeNote: (col_closeNote > -1) ? String(avData[i][col_closeNote] || '').trim() : '',
+                isAllDay: blockIsAllDay,
                 name: resId,          
                 driver: isDriver ? resId : '-', 
                 plate: isDriver ? '-' : resId,  
@@ -482,11 +706,12 @@ function getMainData_() {
                 workName: avData[i][6] || 'งดใช้งาน', 
                 project: avData[i][6] || 'งดใช้งาน',
                 startDate: parseDateToISO_(avData[i][2]),
-                startTime: parseTimeSafe_(avData[i][3]),
+                startTime: parsedStartTime,
                 endDate: parseDateToISO_(avData[i][4]) || parseDateToISO_(avData[i][2]),
-                endTime: parseTimeSafe_(avData[i][5]),
+                endTime: parsedEndTime,
                 dateNum: new Date(parseDateToISO_(avData[i][2])).getTime(),
-                assignedDriver: assignedDriverValue 
+                assignedDriver: assignedDriverValue,
+                tripPhase: tripPhase
              });
           }
           }
@@ -494,21 +719,32 @@ function getMainData_() {
     } catch(ex) {
        Logger.log("Availability Merge Error: " + ex.message + "\nstack: " + ex.stack);
     }
+    const buildCalendarTime = Date.now() - buildCalendarStart;
+    Logger.log('[Timing] Build Calendar (Availability processing): ' + buildCalendarTime + ' ms');
 
-    const driversRes = getDriversFromAdmin_();
+    const buildDriversStart = Date.now();
+    const driversRes = getDriversFromAdmin_(settings);
     const drivers = (driversRes.ok && Array.isArray(driversRes.drivers)) ? driversRes.drivers :[];
+    const buildDriversTime = Date.now() - buildDriversStart;
+    Logger.log('[Timing] Build Drivers (Admin sheet): ' + buildDriversTime + ' ms');
     
-    const platesRes = getAllVehiclePlatesFromSettings();
+    const buildVehiclesStart = Date.now();
+    const platesRes = getAllVehiclePlatesFromSettings(settings);
     const vehicles  = platesRes.ok ? {
       vans: platesRes.vans ||[],
       trucks: platesRes.trucks ||[],
       all: platesRes.all ||[]
     } : { vans:[], trucks: [], all:[] };
+    const buildVehiclesTime = Date.now() - buildVehiclesStart;
+    Logger.log('[Timing] Build Vehicles (Vehicles sheet): ' + buildVehiclesTime + ' ms');
     
+    const buildDashboardStart = Date.now();
     // ดึงรายชื่อโครงการที่ไม่ซ้ำมาทำ Auto-complete (ใช้อิงจาก workName)
     const projects = Array.from(new Set(sortedBookings
       .map(r => String(r.workName || '').trim())
       .filter(Boolean)));
+    const buildDashboardTime = Date.now() - buildDashboardStart;
+    Logger.log('[Timing] Build Dashboard (Projects list): ' + buildDashboardTime + ' ms');
       
     const payload = {
       ok: true,
@@ -518,11 +754,18 @@ function getMainData_() {
         totalBookings: lastRow - 1,
         drivers,
         projects,
-        vehicles
+        vehicles,
+        headerIndexes: idx,
+        spreadsheetId: spreadsheetId
       }
     };
     
-    cachePut_(CK, payload, 120); 
+    const cacheWriteStart = Date.now();
+    cachePutLarge_(CK, payload, 14400); 
+    const cacheWriteTime = Date.now() - cacheWriteStart;
+    Logger.log('[Timing] Cache Write: ' + cacheWriteTime + ' ms');
+    
+    Logger.log('[Timing] Total Time (Cache Miss): ' + (Date.now() - totalStart) + ' ms');
     return payload;
     
   } catch (e) {
@@ -600,6 +843,74 @@ function normalizeCarTypeKeyFromUi(raw) {
   return '';
 }
 
+function checkPendingBookingOverlap(payload) {
+  try {
+    payload = payload || {};
+
+    var reqStart = parseDateTime_(parseDateToISO_(payload.startDate), parseTimeSafe_(payload.startTime));
+    var reqEnd = parseDateTime_(parseDateToISO_(payload.endDate || payload.startDate), parseTimeSafe_(payload.endTime));
+    if (!reqStart || !reqEnd || isNaN(reqStart.getTime()) || isNaN(reqEnd.getTime())) {
+      return { ok: true, hasPending: false, count: 0, items: [] };
+    }
+
+    var requestedTypes = String(payload.carType || '')
+      .split(',')
+      .map(normalizeCarTypeKeyFromUi)
+      .filter(Boolean);
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sh = ss.getSheetByName(SHEET_MAIN_NAME);
+    if (!sh || sh.getLastRow() < 2) return { ok: true, hasPending: false, count: 0, items: [] };
+
+    var headers = _sheetApiGetValues_(sh, 1, 1, 1, sh.getLastColumn(), 'checkPendingBookingOverlap headers')[0]
+      .map(function(h) { return String(h || '').trim(); });
+    var idx = headerIndex_(headers);
+    if (idx.status < 0 || idx.startDate < 0 || idx.startTime < 0 || idx.endDate < 0 || idx.endTime < 0) {
+      return { ok: false, error: 'ไม่พบคอลัมน์จำเป็นสำหรับตรวจคำขอรออนุมัติ' };
+    }
+
+    var values = _sheetApiGetValues_(sh, 2, 1, sh.getLastRow() - 1, headers.length, 'checkPendingBookingOverlap rows');
+    var items = [];
+
+    function clean(v) { return String(v == null ? '' : v).trim(); }
+    function hasTypeOverlap(rowTypeRaw) {
+      if (!requestedTypes.length) return true;
+      var rowTypes = clean(rowTypeRaw).split(',').map(normalizeCarTypeKeyFromUi).filter(Boolean);
+      if (!rowTypes.length) return true;
+      return rowTypes.some(function(t) { return requestedTypes.indexOf(t) > -1; });
+    }
+
+    for (var i = 0; i < values.length; i++) {
+      var row = values[i] || [];
+      var status = (typeof getStatusKeySafe_ === 'function') ? getStatusKeySafe_(row[idx.status]) : clean(row[idx.status]).toLowerCase();
+      if (status !== 'pending') continue;
+      if (!hasTypeOverlap(row[idx.carType])) continue;
+
+      var rowStartISO = parseDateToISO_(row[idx.startDate]);
+      var rowStart = parseDateTime_(rowStartISO, parseTimeSafe_(row[idx.startTime]));
+      var rowEnd = parseDateTime_(parseDateToISO_(row[idx.endDate]) || rowStartISO, parseTimeSafe_(row[idx.endTime]));
+      if (!rowStart || !rowEnd || isNaN(rowStart.getTime()) || isNaN(rowEnd.getTime())) continue;
+      if (!isOverlapping_(reqStart, reqEnd, rowStart, rowEnd)) continue;
+
+      items.push({
+        bookingId: clean(row[idx.bookingId]),
+        name: clean(row[idx.name]),
+        carType: clean(row[idx.carType]),
+        vehicleCount: clean(row[idx.vehicleCount] || '1'),
+        startDate: parseDateToISO_(row[idx.startDate]) || clean(row[idx.startDate]),
+        startTime: parseTimeSafe_(row[idx.startTime]),
+        endDate: parseDateToISO_(row[idx.endDate]) || clean(row[idx.endDate]),
+        endTime: parseTimeSafe_(row[idx.endTime])
+      });
+    }
+
+    return { ok: true, hasPending: items.length > 0, count: items.length, items: items.slice(0, 5) };
+  } catch (e) {
+    Logger.log('checkPendingBookingOverlap Error: ' + (e && e.stack ? e.stack : e));
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+}
+
 
 // ===================== BOOKING MANAGEMENT =====================
 // --- Helper Functions (Global Scope for access by other functions if needed) ---
@@ -658,6 +969,31 @@ function coerceDateOnly_(v) {
      return Utilities.parseDate(`${y}-${m[2]}-${m[1]}`, tz, 'yyyy-MM-dd');
   }
   return '';
+}
+
+// ANCHOR: sheetDateTextForCell
+// แปลงวันที่ทุกรูปแบบ (Date / yyyy-MM-dd / dd/MM/yyyy) เป็น text '30/04/2026
+// prefix ' บังคับ Sheets เก็บเป็น text ป้องกัน Wed Apr... GMT string
+function sheetDateTextForCell(v) {
+  var tz = Session.getScriptTimeZone() || 'Asia/Bangkok';
+  var d = (typeof coerceDateOnlyInTz === 'function')
+    ? coerceDateOnlyInTz(v, tz)
+    : coerceDateOnly_(v);
+  if (!(d instanceof Date) || isNaN(d.getTime())) return '';
+  return "'" + Utilities.formatDate(d, tz, 'dd/MM/yyyy');
+}
+
+// ANCHOR: selfTestSheetDateTextForCell
+function selfTestSheetDateTextForCell() {
+  var cases = [
+    '2026-04-30',
+    '30/04/2026',
+    new Date(2026, 3, 30, 21, 0, 0)
+  ];
+  cases.forEach(function(v) {
+    Logger.log(String(v) + ' => ' + sheetDateTextForCell(v));
+  });
+  return { ok: true };
 }
 
 function createBookingAndBroadcast(payload) {
@@ -749,9 +1085,9 @@ function createBookingAndBroadcast(payload) {
     setV('destination', payload.place || payload.destination);
     setV('carType', typeLabel);
     setV('vehicleCount', requestedCount);
-    setV('startDate', sDateObj);
+    setV('startDate', sheetDateTextForCell(payload.startDate));  // FIX: text dd/MM/yyyy
     setV('startTime', sTimeStr);
-    setV('endDate', eDateObj);
+    setV('endDate', sheetDateTextForCell(payload.endDate || payload.startDate));  // FIX: text dd/MM/yyyy
     setV('endTime', eTimeStr);
     setV('passengers', payload.passengers);
 
@@ -776,8 +1112,9 @@ function createBookingAndBroadcast(payload) {
     setV('reason', payload.reason || "");
 
     const r = _sheetApiAppendRow_(sh, rowData, { label: 'createBookingAndBroadcast append' });
+    try { clearInitialCache_(); } catch (e) {}
     try {
-      const fmtDate = '[$-th-TH-u-ca-buddhist]dd/MM/yyyy';
+      const fmtDate = 'dd/MM/yyyy';
       const formatSpecs = [];
       if (idx.startDate !== -1) formatSpecs.push({ colIndex: idx.startDate, type: 'DATE', pattern: fmtDate });
       if (idx.endDate !== -1) formatSpecs.push({ colIndex: idx.endDate, type: 'DATE', pattern: fmtDate });
@@ -1062,8 +1399,8 @@ function forceThaiBuddhistDateDisplay() {
   const lastRow = sh.getLastRow();
   if (lastRow < 2) return { ok: true, rows: 0 };
 
-  const fmtBE = '[$-th-TH-u-ca-buddhist]dd/MM/yyyy';
-  const fmtFallback = '[$-th-TH]dd/MM/yyyy';
+  const fmtBE = 'dd/MM/yyyy';
+  const fmtFallback = 'dd/MM/yyyy';
 
   const rows = lastRow - 1;
 
@@ -1158,8 +1495,8 @@ function normalizeDateOnlyColumns(opt) {
     range.setValues(values);
 
     // CHANGE: ตั้ง format ให้เป็นวันล้วน (แสดงผลไทย)
-    var fmtBE = '[$-th-TH-u-ca-buddhist]dd/MM/yyyy';
-    var fmtFallback = '[$-th-TH]dd/MM/yyyy';
+    var fmtBE = 'dd/MM/yyyy';
+    var fmtFallback = 'dd/MM/yyyy';
     try {
       sh.getRange(2, idx.startDate + 1, lastRow - 1, 1).setNumberFormat(fmtBE);
       sh.getRange(2, idx.endDate + 1, lastRow - 1, 1).setNumberFormat(fmtBE);
@@ -1382,8 +1719,8 @@ function normalizeDateOnlyByBookingId(opt) {
     if (needEd) sh.getRange(targetRow, idx.endDate + 1).setValue(toDateOnly(ed));
 
     // set format ให้เห็นเป็นวันล้วน
-    sh.getRange(targetRow, idx.startDate + 1).setNumberFormat('[$-th-TH]dd/MM/yyyy');
-    sh.getRange(targetRow, idx.endDate + 1).setNumberFormat('[$-th-TH]dd/MM/yyyy');
+    sh.getRange(targetRow, idx.startDate + 1).setNumberFormat('dd/MM/yyyy');
+    sh.getRange(targetRow, idx.endDate + 1).setNumberFormat('dd/MM/yyyy');
 
     SpreadsheetApp.flush();
   }
@@ -1400,34 +1737,96 @@ function runNormalize1352() {
 }
 
 // ANCHOR: getIntegratedDailyReport
-function getIntegratedDailyReport(targetDate) {
+function getIntegratedDailyReport(targetDate, opts) {
   try {
+    opts = opts || {};
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sh = ss.getSheetByName('Data');
     if (!sh) return '❌ ไม่พบชีต Data';
 
-    var tz = Session.getScriptTimeZone() || 'Asia/Bangkok';
+    var tz = 'Asia/Bangkok';
     var d = (targetDate instanceof Date) ? targetDate : new Date();
     var reportDateISO = Utilities.formatDate(d, tz, 'yyyy-MM-dd');
     var reportTime = Utilities.formatDate(new Date(), tz, 'HH:mm');
+    var DAILY_REPORT_ITEMS_PER_PAGE = 10;
 
     var TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
-    var dateHeader = Utilities.formatDate(d, tz, 'dd') + ' ' + TH_MONTHS[d.getMonth()] + ' ' + (d.getFullYear() + 543);
+    var dateHeader = Utilities.formatDate(d, tz, 'dd') + ' ' + TH_MONTHS[Number(Utilities.formatDate(d, tz, 'M')) - 1] + ' ' + (Number(Utilities.formatDate(d, tz, 'yyyy')) + 543);
+
+    function returnDailyPages_(pages) {
+      return opts.asPages === true ? pages : pages.join('\n\n');
+    }
+
+    function pageLimitChars_() {
+      return 3800;
+    }
+
+    function splitPagesByLimit_(pages) {
+      if (!Array.isArray(pages) || !pages.length) return [''];
+      var out = [];
+      pages.forEach(function(page) {
+        var text = String(page || '').trim();
+        if (!text) return;
+        if (text.length <= pageLimitChars_()) {
+          out.push(text);
+          return;
+        }
+        var chunks = text.split(/\n(?=\d+\. )/);
+        var cur = '';
+        chunks.forEach(function(chunk) {
+          var next = cur ? (cur + '\n' + chunk) : chunk;
+          if (next.length > pageLimitChars_() && cur) {
+            out.push(cur.trim());
+            cur = chunk;
+          } else {
+            cur = next;
+          }
+        });
+        if (cur) out.push(cur.trim());
+      });
+      return out.length ? out : [''];
+    }
+
+    function buildDailyHeaderLines_(pageNo, totalPages, statGroups) {
+      return [
+        '📋 รายงานระบบจองยานพาหนะ',
+        '📅 ' + dateHeader,
+        '📄 หน้า ' + pageNo + '/' + totalPages,
+        '',
+        '📊 สถิติรายการวันนี้',
+        '⏳ รออนุมัติ: ' + statGroups.pending.length + ' รายการ',
+        '✅ อนุมัติ: ' + statGroups.approved.length + ' รายการ',
+        '⚡ พิเศษ: ' + statGroups.driver_special_approved.length + ' รายการ',
+        '❌ ไม่อนุมัติ: ' + statGroups.rejected.length + ' รายการ',
+        '🚫 ยกเลิก: ' + statGroups.cancelled.length + ' รายการ'
+      ];
+    }
+
+    function buildNoJobMessage_() {
+      var emptyGroups = { pending: [], approved: [], driver_special_approved: [], rejected: [], cancelled: [] };
+      var out = buildDailyHeaderLines_(1, 1, emptyGroups);
+      out.push('');
+      out.push('━━━━━━━━━━━━━━');
+      out.push('🍃 ไม่มีรายการเดินทางในวันนี้');
+      out.push('');
+      out.push('🤖 รายงานอัตโนมัติ ' + reportTime + ' น.');
+      return out.join('\n');
+    }
 
     var data = _sheetApiGetValues_(sh, 1, 1, sh.getLastRow(), sh.getLastColumn(), 'specialApproveBooking read');
     var noJobMsg = (typeof getNoJobTemplate_ === 'function')
       ? getNoJobTemplate_(dateHeader)
       : [
-          '📋 รายงานระบบจองยานพาหนะ (ประจำวัน)',
+          '📋 รายงานระบบจองยานพาหนะ',
           '📅 ' + dateHeader,
           '──────────────',
           '',
           '🍃 ไม่มีรายการเดินทางในวันนี้',
           '',
-          '🤖 รายงานอัตโนมัติ ' + reportTime
+          '🤖 รายงานอัตโนมัติ ' + reportTime + ' น.'
         ].join('\n');
 
-    if (data.length < 2) return noJobMsg;
+    if (data.length < 2) return returnDailyPages_([buildNoJobMessage_()]);
 
     var h = data[0].map(function(x) { return String(x).trim(); });
     var idx = {
@@ -1439,7 +1838,8 @@ function getIntegratedDailyReport(targetDate) {
       startD: h.indexOf('วันเริ่มต้น'),
       endD: h.indexOf('วันสิ้นสุด'),
       startT: h.indexOf('เวลาเริ่มต้น'),
-      endT: h.indexOf('เวลาสิ้นสุด')
+      endT: h.indexOf('เวลาสิ้นสุด'),
+      bookingId: h.indexOf('Booking ID')
     };
 
     var groups = {
@@ -1469,36 +1869,23 @@ function getIntegratedDailyReport(targetDate) {
       var plates = splitMultiValue_(plateRaw);
       var drivers = splitMultiValue_(driverRaw);
       if (!plates.length && !drivers.length) return '';
-      var plateText = plates.length ? plates.join(', ') : 'รอระบุทะเบียนรถ';
-      var driverText = drivers.length ? drivers.join(', ') : 'รอระบุพนักงานขับรถ';
-      return '🚐 ' + plateText + ' (' + driverText + ')';
+      var parts = [];
+      if (plates.length) parts.push(plates.join(', '));
+      if (drivers.length) parts.push(drivers.join(', '));
+      return '🚐 ' + parts.join(' • ');
     }
 
     function buildTimeRangeLines_(r) {
-      var st = (typeof parseTimeSafe_ === 'function')
-        ? parseTimeSafe_(r[idx.startT])
-        : cleanText_(r[idx.startT], '--:--');
-      var et = (typeof parseTimeSafe_ === 'function')
-        ? parseTimeSafe_(r[idx.endT])
-        : cleanText_(r[idx.endT], '--:--');
+      var st = (typeof parseTimeSafe_ === 'function') ? parseTimeSafe_(r[idx.startT]) : cleanText_(r[idx.startT], '--:--');
+      var et = (typeof parseTimeSafe_ === 'function') ? parseTimeSafe_(r[idx.endT]) : cleanText_(r[idx.endT], '--:--');
       var sIso = (typeof parseDateToISO_ === 'function') ? parseDateToISO_(r[idx.startD]) : '';
       var eIso = (typeof parseDateToISO_ === 'function') ? parseDateToISO_(r[idx.endD]) : (sIso || '');
       var sameDay = !!(sIso && eIso && sIso === eIso);
-      var sDateTH = (typeof fmtThaiDateSafe_ === 'function')
-        ? fmtThaiDateSafe_(r[idx.startD])
-        : cleanText_(r[idx.startD], '-');
-      var eDateTH = (typeof fmtThaiDateSafe_ === 'function')
-        ? fmtThaiDateSafe_(r[idx.endD] || r[idx.startD])
-        : cleanText_(r[idx.endD] || r[idx.startD], '-');
+      var sDateTH = (typeof fmtThaiDateSafe_ === 'function') ? fmtThaiDateSafe_(r[idx.startD]) : cleanText_(r[idx.startD], '-');
+      var eDateTH = (typeof fmtThaiDateSafe_ === 'function') ? fmtThaiDateSafe_(r[idx.endD] || r[idx.startD]) : cleanText_(r[idx.endD] || r[idx.startD], '-');
 
-      if (sameDay) {
-        return ['🕒 ' + sDateTH + ' ' + st + ' - ' + et];
-      }
-
-      return [
-        '🕒 ไป ' + sDateTH + ' ' + st + ' น.',
-        '   กลับ ' + eDateTH + ' ' + et + ' น.'
-      ];
+      if (sameDay) return ['🕒 ' + st + ' → ' + et + ' น.'];
+      return ['🕒 ' + sDateTH + ' ' + st + ' → ' + eDateTH + ' ' + et + ' น.'];
     }
 
     for (var i = 1; i < data.length; i++) {
@@ -1524,7 +1911,134 @@ function getIntegratedDailyReport(targetDate) {
       groups.rejected.length +
       groups.cancelled.length;
 
-    if (totalFound === 0) return noJobMsg;
+    if (totalFound === 0) return returnDailyPages_([buildNoJobMessage_()]);
+
+    function bookingIdOf_(r) {
+      return idx.bookingId > -1 ? cleanText_(r[idx.bookingId], '') : '';
+    }
+
+    function compareBookingId_(a, b) {
+      var aa = bookingIdOf_(a);
+      var bb = bookingIdOf_(b);
+      if (aa === bb) return 0;
+      if (!aa) return 1;
+      if (!bb) return -1;
+      var na = parseInt(String(aa).replace(/[^\d]/g, ''), 10);
+      var nb = parseInt(String(bb).replace(/[^\d]/g, ''), 10);
+      if (isFinite(na) && isFinite(nb) && na !== nb) return na - nb;
+      return String(aa).localeCompare(String(bb));
+    }
+
+    function sortDailyRows_(rows) {
+      rows.sort(function(a, b) {
+        var da = (typeof parseDateToISO_ === 'function') ? parseDateToISO_(a[idx.startD]) : '';
+        var db = (typeof parseDateToISO_ === 'function') ? parseDateToISO_(b[idx.startD]) : '';
+        var ta = (typeof parseTimeSafe_ === 'function') ? parseTimeSafe_(a[idx.startT]) : cleanText_(a[idx.startT], '');
+        var tb = (typeof parseTimeSafe_ === 'function') ? parseTimeSafe_(b[idx.startT]) : cleanText_(b[idx.startT], '');
+        var ka = (da || '9999-12-31') + ' ' + (ta || '99:99');
+        var kb = (db || '9999-12-31') + ' ' + (tb || '99:99');
+        if (ka !== kb) return ka < kb ? -1 : 1;
+        return compareBookingId_(a, b);
+      });
+    }
+
+    sortDailyRows_(groups.pending);
+    sortDailyRows_(groups.approved);
+    sortDailyRows_(groups.driver_special_approved);
+    sortDailyRows_(groups.rejected);
+    sortDailyRows_(groups.cancelled);
+
+    function renderDailyItemLines_(r, itemNo) {
+      var out = [];
+      var timeLines = buildTimeRangeLines_(r);
+      out.push(itemNo + '. ' + (timeLines[0] || '🕒 --:-- → --:-- น.'));
+      for (var t = 1; t < timeLines.length; t++) out.push(timeLines[t]);
+      out.push('📍 ' + cleanText_(r[idx.place], '-'));
+      out.push('👤 ' + cleanText_(r[idx.name], '-'));
+      var vehicleLine = buildVehicleLine_(r[idx.vehicle], r[idx.driver]);
+      if (vehicleLine) out.push(vehicleLine);
+      return out;
+    }
+
+    function buildStatLine_(key, label, icon) {
+      return icon + ' ' + label + ': ' + groups[key].length + ' รายการ';
+    }
+
+    function buildDailyPages_() {
+      var statusBlocks = [
+        { key: 'pending', label: 'รายการรออนุมัติ', emoji: '⏳', rows: groups.pending },
+        { key: 'approved', label: 'รายการอนุมัติ', emoji: '✅', rows: groups.approved },
+        { key: 'driver_special_approved', label: 'รายการพิเศษ', emoji: '⚡', rows: groups.driver_special_approved },
+        { key: 'rejected', label: 'รายการไม่อนุมัติ', emoji: '❌', rows: groups.rejected },
+        { key: 'cancelled', label: 'รายการยกเลิก', emoji: '🚫', rows: groups.cancelled }
+      ];
+
+      var pageBlocks = [];
+      var current = [];
+      var currentCount = 0;
+
+      statusBlocks.forEach(function(block) {
+        if (!block.rows || block.rows.length === 0) return;
+        var sorted = block.rows.slice().sort(function(a, b) {
+          var da = (typeof parseDateToISO_ === 'function') ? parseDateToISO_(a[idx.startD]) : '';
+          var db = (typeof parseDateToISO_ === 'function') ? parseDateToISO_(b[idx.startD]) : '';
+          var ta = (typeof parseTimeSafe_ === 'function') ? parseTimeSafe_(a[idx.startT]) : cleanText_(a[idx.startT], '');
+          var tb = (typeof parseTimeSafe_ === 'function') ? parseTimeSafe_(b[idx.startT]) : cleanText_(b[idx.startT], '');
+          var ka = (da || '9999-12-31') + ' ' + (ta || '99:99');
+          var kb = (db || '9999-12-31') + ' ' + (tb || '99:99');
+          if (ka !== kb) return ka < kb ? -1 : 1;
+          return compareBookingId_(a, b);
+        });
+
+        for (var i = 0; i < sorted.length; i += DAILY_REPORT_ITEMS_PER_PAGE) {
+          var chunk = sorted.slice(i, i + DAILY_REPORT_ITEMS_PER_PAGE);
+          if (currentCount > 0 && currentCount + chunk.length > DAILY_REPORT_ITEMS_PER_PAGE) {
+            pageBlocks.push(current);
+            current = [];
+            currentCount = 0;
+          }
+          current.push({
+            key: block.key,
+            label: block.label,
+            emoji: block.emoji,
+            total: sorted.length,
+            startIndex: i,
+            rows: chunk
+          });
+          currentCount += chunk.length;
+        }
+      });
+      if (current.length) pageBlocks.push(current);
+
+      var totalPages = Math.max(pageBlocks.length, 1);
+      return pageBlocks.map(function(blocks, pageIndex) {
+        var out = buildDailyHeaderLines_(pageIndex + 1, totalPages, groups);
+        blocks.forEach(function(block) {
+          out.push('');
+          out.push('━━━━━━━━━━━━━━');
+          out.push(block.emoji + ' ' + block.label + ' (' + block.total + ' รายการ)');
+          out.push('');
+          block.rows.forEach(function(r, i) {
+            if (i > 0) {
+              out.push('');
+              out.push('────────────────');
+              out.push('');
+            }
+            Array.prototype.push.apply(out, renderDailyItemLines_(r, block.startIndex + i + 1));
+          });
+        });
+        out.push('');
+        out.push('🤖 รายงานอัตโนมัติ ' + reportTime + ' น.');
+        return out.join('\n')
+          .replace(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/gi, '')
+          .replace(/D\s*น\./gi, '')
+          .replace(/[ \t]{2,}/g, ' ')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+      });
+    }
+
+    return returnDailyPages_(buildDailyPages_());
 
     var lines = [
       '📋 รายงานระบบจองยานพาหนะ (ประจำวัน)',
@@ -1538,23 +2052,31 @@ function getIntegratedDailyReport(targetDate) {
       '🚫 ยกเลิก: ' + groups.cancelled.length + ' รายการ'
     ];
 
-    var approvedRows = groups.approved.concat(groups.driver_special_approved);
-    if (approvedRows.length) {
+    // Helper function to render detail block for a status group
+    function renderStatusBlock_(rows, statusLabel, statusEmoji) {
+      if (!rows || rows.length === 0) return;
       lines.push('');
       lines.push('──────────────');
-      lines.push('✅ รายการอนุมัติแล้ว');
+      lines.push(statusEmoji + ' ' + statusLabel + ' (' + rows.length + ' รายการ)');
       lines.push('');
 
-      approvedRows.forEach(function(r, index) {
+      rows.forEach(function(r, index) {
         var timeLines = buildTimeRangeLines_(r);
         for (var t = 0; t < timeLines.length; t++) lines.push(timeLines[t]);
         lines.push('📍 ' + cleanText_(r[idx.place], '-'));
         lines.push('👤 ' + cleanText_(r[idx.name], '-'));
         var vehicleLine = buildVehicleLine_(r[idx.vehicle], r[idx.driver]);
         if (vehicleLine) lines.push(vehicleLine);
-        if (index < approvedRows.length - 1) lines.push('');
+        if (index < rows.length - 1) lines.push('');
       });
     }
+
+    // Render detail blocks for all statuses with entries (only if has items)
+    renderStatusBlock_(groups.pending, 'รายการรออนุมัติ', '⏳');
+    renderStatusBlock_(groups.approved, 'รายการอนุมัติ', '✅');
+    renderStatusBlock_(groups.driver_special_approved, 'รายการอนุมัติกรณีพิเศษ', '⚡');
+    renderStatusBlock_(groups.rejected, 'รายการไม่อนุมัติ', '❌');
+    renderStatusBlock_(groups.cancelled, 'รายการยกเลิก', '🚫');
 
     lines.push('');
     lines.push('──────────────');
@@ -1576,13 +2098,13 @@ function getIntegratedDailyReport(targetDate) {
 function getNoJobTemplate_(dateHeader) {
   var tz = Session.getScriptTimeZone() || 'Asia/Bangkok';
   return [
-    '📋 รายงานระบบจองยานพาหนะ (ประจำวัน)',
+    '📋 รายงานระบบจองยานพาหนะ',
     '📅 ' + dateHeader,
     '──────────────',
     '',
     '🍃 ไม่มีรายการเดินทางในวันนี้',
     '',
-    '🤖 รายงานอัตโนมัติ ' + Utilities.formatDate(new Date(), tz, 'HH:mm')
+    '🤖 รายงานอัตโนมัติ ' + Utilities.formatDate(new Date(), tz, 'HH:mm') + ' น.'
   ].join('\n');
 }
 
@@ -2721,34 +3243,51 @@ function dailySummaryAt5am() {
 /* 🍓 [BERRY FIXED] แกนหลักในการส่ง Report (รองรับระบบกันส่งซ้ำ) */
 function sendDailySummaryNotification(forceSend) {
   try {
-    var tz = Session.getScriptTimeZone() || "Asia/Bangkok";
+    var tz = "Asia/Bangkok";
     var now = new Date();
 
     Logger.log("===== DAILY REPORT TRIGGER START =====");
     Logger.log("Current Time: " + Utilities.formatDate(now, tz, "yyyy-MM-dd HH:mm:ss"));
 
-    var msg = getIntegratedDailyReport(now);
+    var reportPages = getIntegratedDailyReport(now, { asPages: true });
+    if (!Array.isArray(reportPages)) reportPages = [reportPages];
+    var msg = reportPages[0] || '';
 
     if (!msg || msg.indexOf('ไม่พบชีต Data') > -1) {
       Logger.log("❌ REPORT EMPTY OR ERROR → NOT SENDING");
       return;
     }
 
-    Logger.log("📄 REPORT GENERATED LENGTH: " + msg.length);
+    Logger.log("📄 REPORT GENERATED PAGES: " + reportPages.length + " | FIRST LENGTH: " + msg.length);
 
     // กุญแจกันส่งซ้ำประจำวัน (1 วันส่งได้ครั้งเดียวต่อ 1 คีย์)
     var dedupeKey = 'DAILY_REPORT_' + Utilities.formatDate(now, tz, 'yyyyMMdd');
     Logger.log("DedupeKey: " + dedupeKey);
 
     // ส่งเข้า Telegram พร้อมระบบป้องกันการเบิ้ล
-    var res = sendTelegramOnce(msg, {
-      parse_mode: 'HTML',
-      disable_preview: true,
-      dedupeKey: dedupeKey,
-      force: forceSend === true // 🍓 ถ้าไม่ได้สั่ง force = true จะไม่ยอมส่งซ้ำค่ะ
-    });
+    var results = [];
+    for (var p = 0; p < reportPages.length; p++) {
+      var pageMsg = reportPages[p];
+      if (!String(pageMsg || '').trim()) continue;
+      if (String(pageMsg).length > 4096) {
+        Logger.log("❌ DAILY REPORT PAGE TOO LONG: page=" + (p + 1) + " length=" + String(pageMsg).length);
+        results.push({ ok: false, error: 'Telegram page exceeds 4096 chars', page: p + 1, length: String(pageMsg).length });
+        continue;
+      }
 
-    Logger.log("📤 TELEGRAM RESULT: " + JSON.stringify(res));
+      var pageKey = (reportPages.length === 1)
+        ? dedupeKey
+        : (dedupeKey + '_P' + (p + 1) + '_OF_' + reportPages.length);
+      var res = sendTelegramOnce(pageMsg, {
+        parse_mode: 'HTML',
+        disable_preview: true,
+        dedupeKey: pageKey,
+        force: forceSend === true // 🍓 ถ้าไม่ได้สั่ง force = true จะไม่ยอมส่งซ้ำค่ะ
+      });
+      results.push(res);
+    }
+
+    Logger.log("📤 TELEGRAM RESULT: " + JSON.stringify(results));
     Logger.log("===== DAILY REPORT TRIGGER END =====");
 
   } catch (e) {
@@ -2873,6 +3412,120 @@ function apiReminderScanDebug(){
   }catch(e){
     Logger.log('apiReminderScanDebug error: ' + e.stack);
     return _err_(e);
+  }
+}
+
+/* Self-test: เช็คเตือนประกันใกล้หมดอายุ + รถใกล้กำหนดเข้าศูนย์
+ * default = dry-run (ไม่ส่ง Telegram)
+ * ถ้าต้องการส่งจริงให้เรียก: selfTestReminderNotifications({ forceSend: true })
+ */
+function selfTestReminderNotifications(opts){
+  try{
+    var forceSend = !!(opts && opts.forceSend === true);
+    var scanRes = apiReminderScanDebug();
+    if (!scanRes || scanRes.ok !== true){
+      return scanRes || { ok:false, error:'scan failed' };
+    }
+
+    var scanData = scanRes.data || {};
+    var ins = Array.isArray(scanData.insurance) ? scanData.insurance : [];
+    var mai = Array.isArray(scanData.maintenance) ? scanData.maintenance : [];
+
+    var insWithin = ins.filter(function(x){ return !!(x && x.withinWindow); }).length;
+    var maiWithin = mai.filter(function(x){ return !!(x && x.withinWindow); }).length;
+
+    var sendRes = null;
+    if (forceSend){
+      sendRes = runAllReminders_();
+    }
+
+    var summary = {
+      mode: forceSend ? 'send_real' : 'dry_run',
+      leadDays: scanData.leadDays || { insurance: 3, maintenance: 3 },
+      insurance: { total: ins.length, withinWindow: insWithin },
+      maintenance: { total: mai.length, withinWindow: maiWithin },
+      sendResult: sendRes
+    };
+
+    Logger.log('selfTestReminderNotifications => ' + JSON.stringify(summary));
+    return { ok:true, data: summary };
+  }catch(e){
+    try{ Logger.log('selfTestReminderNotifications error: ' + e.stack); }catch(_){}
+    return { ok:false, error: e.message };
+  }
+}
+
+/* Self-test: ส่งแจ้งเตือนจริงด้วยข้อมูลจำลอง (ไม่แตะชีตจริง)
+ * ตัวอย่าง: selfTestReminderNotificationsWithMock({ tag: 'UAT' })
+ */
+function selfTestReminderNotificationsWithMock(opts){
+  try{
+    var now = new Date();
+    var tag = String((opts && opts.tag) || 'MOCK').trim();
+    var insuranceInput = (opts && Array.isArray(opts.insurance)) ? opts.insurance : [
+      { plate: 'TEST-INS-001', due: new Date(now.getTime() + 24 * 60 * 60 * 1000), source: 'MockInsurance' },
+      { plate: 'TEST-INS-002', due: new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000), source: 'MockInsurance' }
+    ];
+    var maintenanceInput = (opts && Array.isArray(opts.maintenance)) ? opts.maintenance : [
+      { plate: 'TEST-MAI-001', due: new Date(now.getTime() + 24 * 60 * 60 * 1000), source: 'MockMaintenance' },
+      { plate: 'TEST-MAI-002', due: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000), source: 'MockMaintenance' }
+    ];
+
+    function toDateSafe(v){
+      if (v instanceof Date && !isNaN(v.getTime())) return v;
+      var d = _vb_parseDate(v);
+      return (d && !isNaN(d.getTime())) ? d : null;
+    }
+
+    function sendMock(list, kind){
+      var sent = 0;
+      var total = 0;
+      var errors = [];
+      var details = [];
+      for (var i = 0; i < list.length; i++){
+        var row = list[i] || {};
+        var plate = String(row.plate || '').trim();
+        var due = toDateSafe(row.due);
+        var source = String(row.source || ('Mock' + kind)).trim();
+        if (!plate || !due) continue;
+        total++;
+
+        var dd = _vb_fmtThaiDate(due) + ' เวลา ' + _vb_fmtThaiTime(due);
+        var msg = (kind === 'insurance'
+          ? '🛡️ [TEST] แจ้งเตือนประกันใกล้หมดอายุ\n'
+          : '🧰 [TEST] แจ้งเตือนกำหนดเข้ารับบริการซ่อมครั้งถัดไป\n')
+          + 'ทะเบียน: ' + plate + '\n'
+          + (kind === 'insurance' ? 'ครบกำหนด: ' : 'กำหนด: ') + dd + '\n'
+          + 'แหล่งข้อมูล: ' + source + '\n'
+          + 'Tag: ' + tag;
+
+        var dedupeKey = 'REM:TEST:' + kind.toUpperCase() + ':' + tag + ':' + plate + ':' + Utilities.formatDate(due, TZ, 'yyyyMMddHHmm');
+        var r = sendTelegramOnce(msg, { parse_mode:'HTML', disable_preview:true, dedupeKey:dedupeKey, force:true });
+        if (r && r.ok){
+          sent++;
+          details.push({ plate: plate, dueISO: due.toISOString(), ok: true });
+        }else{
+          var err = (r && r.error) ? r.error : 'send_failed';
+          errors.push({ plate: plate, error: err });
+          details.push({ plate: plate, dueISO: due.toISOString(), ok: false, error: err });
+        }
+      }
+      return { sent: sent, total: total, errors: errors, details: details };
+    }
+
+    var insRes = sendMock(insuranceInput, 'insurance');
+    var maiRes = sendMock(maintenanceInput, 'maintenance');
+    var summary = {
+      mode: 'mock_send_real',
+      tag: tag,
+      insurance: insRes,
+      maintenance: maiRes
+    };
+    Logger.log('selfTestReminderNotificationsWithMock => ' + JSON.stringify(summary));
+    return { ok:true, data: summary };
+  }catch(e){
+    try{ Logger.log('selfTestReminderNotificationsWithMock error: ' + e.stack); }catch(_){}
+    return { ok:false, error: e.message };
   }
 }
 
@@ -3188,6 +3841,88 @@ function apiDailySummaryHealth() {
   }
 }
 
+// ยิงแจ้งเตือน Telegram ซ้ำสำหรับ "งานล่าสุดที่อนุมัติแล้ว" ทันที
+function apiNotifyLatestApprovedTelegram(payload) {
+  try {
+    payload = payload || {};
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); } catch (e0) {}
+    }
+
+    var testMode = payload.testMode === true;
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sh = ss.getSheetByName('Data');
+    if (!sh) return { ok: false, error: 'ไม่พบชีต "Data"' };
+
+    var lastRow = sh.getLastRow();
+    var lastCol = sh.getLastColumn();
+    if (lastRow < 2 || lastCol < 1) {
+      return { ok: false, error: 'ไม่พบข้อมูลในชีต Data' };
+    }
+
+    var headersRow = _sheetApiGetValues_(sh, 1, 1, 1, lastCol, 'apiNotifyLatestApprovedTelegram headers');
+    var headers = (headersRow && headersRow[0]) ? headersRow[0].map(function(h){ return String(h || '').trim(); }) : [];
+    var idx = (typeof headerIndex_ === 'function') ? headerIndex_(headers) : {};
+
+    function normalizeIdx(v) {
+      if (v === -1 || v == null || v === '' || v === false) return undefined;
+      return v;
+    }
+    function colIndexByName(name) {
+      var i = headers.indexOf(name);
+      return (i >= 0) ? i : undefined;
+    }
+
+    idx = idx || {};
+    if (idx.bookingId === undefined) idx.bookingId = colIndexByName('Booking ID');
+    if (idx.status === undefined) idx.status = colIndexByName('สถานะ');
+    idx.bookingId = normalizeIdx(idx.bookingId);
+    idx.status = normalizeIdx(idx.status);
+
+    if (idx.bookingId === undefined) return { ok: false, error: 'ไม่พบคอลัมน์ "Booking ID"' };
+    if (idx.status === undefined) return { ok: false, error: 'ไม่พบคอลัมน์ "สถานะ"' };
+
+    var rows = _sheetApiGetValues_(sh, 2, 1, lastRow - 1, lastCol, 'apiNotifyLatestApprovedTelegram rows');
+    var foundOffset = -1;
+    for (var i = rows.length - 1; i >= 0; i--) {
+      var statusText = String(rows[i][idx.status] == null ? '' : rows[i][idx.status]).toLowerCase().trim();
+      if (statusText.indexOf('approved') > -1 || statusText.indexOf('อนุมัติ') > -1) {
+        foundOffset = i;
+        break;
+      }
+    }
+
+    if (foundOffset < 0) {
+      return { ok: false, error: 'ไม่พบรายการที่มีสถานะอนุมัติในชีต Data' };
+    }
+
+    var rowVals = rows[foundOffset].slice();
+    var rowObj = {};
+    for (var c = 0; c < headers.length; c++) {
+      var key = headers[c] || ('COL_' + (c + 1));
+      rowObj[key] = rowVals[c];
+    }
+    rowObj.bookingId = rowVals[idx.bookingId];
+    rowObj.status = rowVals[idx.status];
+
+    if (typeof sendTelegramNotify !== 'function') {
+      return { ok: false, error: 'ไม่พบฟังก์ชัน sendTelegramNotify ในระบบ' };
+    }
+
+    var notifyRes = sendTelegramNotify(rowObj, testMode === true);
+    return {
+      ok: true,
+      mode: testMode ? 'preview' : 'send',
+      bookingId: String(rowObj.bookingId || '').trim(),
+      status: String(rowObj.status || '').trim(),
+      sheetRow: foundOffset + 2,
+      telegram: notifyRes
+    };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+}
+
 function getById(bookingId) {
   try {
     const idToFind = String(bookingId || '').trim();
@@ -3393,7 +4128,7 @@ function updateBookingStatus(payload) {
     }
 
     // 🍓 BERRY FIX: Clear cache เพื่อบังคับให้ UI/Calendar หน้าบ้านรีเฟรชข้อมูลสถานะและเวลาที่ถูกต้องทันที
-    try { cacheDelete_('mainDataCache_v13_BerryFix'); } catch(e) {}
+    try { clearInitialCache_(); } catch(e) {}
 
     // ✅ build rowObj using header mapping (object)
     var rowObj = {};
@@ -3555,12 +4290,37 @@ function checkResourcesConflict_(sh, idx, sDate, sTime, eDate, eTime, excludeId,
                 return { hasConflict: true, message: `รถ ${vehicleConflict} ติดงานอื่นในช่วงเวลานี้ (Booking ID: ${rowId})` };
             }
 
-            // เช็คคนขับซ้ำ (ถ้ามีคนขับส่งมาเช็ค)
+            // เช็คคนขับซ้ำ (ถ้ามีคนขับส่งมาเช็ค) [BERRY FIX OVERRIDE]
+            /*
             if (checkDrivers && checkDrivers.length > 0) {
                 const rowDrivers = String(row[idx.driver] || '').split(',').map(d => d.trim());
                 const driverConflict = checkDrivers.find(d => rowDrivers.includes(d));
                 if (driverConflict) {
                     return { hasConflict: true, message: `คนขับ ${driverConflict} ติดงานอื่นในช่วงเวลานี้ (Booking ID: ${rowId})` };
+                }
+            */
+            if (checkDrivers && checkDrivers.length > 0) {
+                const headers = data[0] || [];
+                const getColIndex_ = (candidates) => {
+                    for (let name of candidates) {
+                        let i = headers.indexOf(name);
+                        if (i !== -1) return i;
+                    }
+                    return -1;
+                };
+                const workTypeIdx = (idx.workType !== undefined && idx.workType !== -1) ? idx.workType : getColIndex_(['ประเภทงาน', 'jobType']);
+                const workNameIdx = (idx.workName !== undefined && idx.workName !== -1) ? idx.workName : getColIndex_(['งาน/โครงการ', 'ชื่อโครงการ/งาน', 'projectName', 'project']);
+                
+                const rowWorkType = (workTypeIdx !== -1) ? String(row[workTypeIdx] || '').trim() : '';
+                const rowWorkName = (workNameIdx !== -1) ? String(row[workNameIdx] || '').trim() : '';
+                const isRepairJob = /ซ่อม|repair|maintenance/i.test(rowWorkType + '|' + rowWorkName);
+
+                if (!isRepairJob) {
+                    const rowDrivers = String(row[idx.driver] || '').split(',').map(d => d.trim());
+                    const driverConflict = checkDrivers.find(d => rowDrivers.includes(d));
+                    if (driverConflict) {
+                        return { hasConflict: true, message: `คนขับ ${driverConflict} ติดงานอื่นในช่วงเวลานี้ (Booking ID: ${rowId})` };
+                    }
                 }
             }
         }
@@ -3727,7 +4487,9 @@ function apiGetAdminPanelData() {
     const vStatusMap = parseBoolMap_(vStatusKv.val);
 
     // 🍓 BERRY FIX: ใช้แหล่งข้อมูลเดียวกับ Radar เสมอ
-    const liveRes = buildRadarData();
+    // FIX-PERF: เรียก buildRadarContext_ ครั้งเดียว แล้วใช้ทั้ง liveMap + vehicleRepairBlockMap
+    const radarCtxShared = buildRadarContext_();
+    const liveRes = buildRadarData.fromCtx ? buildRadarData.fromCtx(radarCtxShared) : buildRadarData();
     const liveDriversMap = {};
     const liveVehiclesMap = {};
 
@@ -3743,26 +4505,135 @@ function apiGetAdminPanelData() {
       const live = liveDriversMap[name] || { status: 'ready', label: 'พร้อม' };
       const drvStatus = !isActive ? 'leave' : live.status;
       const drvLabel  = !isActive ? 'ลา'    : live.label;
+
+      let upcomingBadge = '';
+      if (isActive && live.status === 'ready') {
+        const todayMs = radarCtxShared.now ? radarCtxShared.now.getTime() : new Date().getTime();
+        let earliestUpcoming = Infinity;
+        let upcomingTimeStr = '';
+
+        (radarCtxShared.approvedBookings || []).forEach(function(b) {
+          const driversList = String(b.driverRaw || b.driver || '').split(/[,\n|\/]+/).map(normalizeRadarName_);
+          if (driversList.indexOf(name) !== -1) {
+            const startMs = b.startAt.getTime();
+            if (startMs > todayMs && startMs < earliestUpcoming) {
+              earliestUpcoming = startMs;
+              upcomingTimeStr = Utilities.formatDate(b.startAt, 'Asia/Bangkok', 'HH:mm');
+            }
+          }
+        });
+
+        (radarCtxShared.availBlocks || []).forEach(function(blk) {
+          if (blk.resourceType === 'driver' && !blk.isClosed && normalizeRadarName_(blk.resourceId) === name) {
+            const startMs = blk.startAt.getTime();
+            if (startMs > todayMs && startMs < earliestUpcoming) {
+              earliestUpcoming = startMs;
+              upcomingTimeStr = Utilities.formatDate(blk.startAt, 'Asia/Bangkok', 'HH:mm');
+            }
+          }
+        });
+
+        if (upcomingTimeStr) {
+          upcomingBadge = 'มีภารกิจ ' + upcomingTimeStr;
+        }
+      }
+
       return {
         name: name, username: d.username, role: d.role, active: isActive,
         status: drvStatus, label: drvLabel,
         isBusy: (!isActive) || (live.status !== 'ready'),
-        busyBadge: drvLabel
+        busyBadge: drvLabel,
+        upcomingBadge: upcomingBadge
       };
     });
+
+    // FIX: build vehicleRepairBlockMap จาก radarCtxShared.availBlocks (no extra sheet read)
+    // รถที่มี vehicle_block ที่ครอบ today/ยังไม่จบ (not closed) → แสดงเป็น repair ใน modal
+    const vehicleRepairBlockMap = {};
+    const vehicleUpcomingBlockMap = {};
+    try {
+      const todayMs = radarCtxShared.now ? radarCtxShared.now.getTime() : new Date().getTime();
+      (radarCtxShared.availBlocks || []).forEach(function(blk) {
+        if (blk.resourceType !== 'vehicle') return;
+        if (blk.isClosed) return;
+        const startMs = blk.startAt ? blk.startAt.getTime() : Infinity;
+        const endMs   = blk.endAt   ? blk.endAt.getTime()   : 0;
+        // 🍓 FIX: ตรวจว่า block หมดอายุแล้ว (now > endAt) → skip ทันที
+        if (todayMs >= endMs) return;
+        const normPlate = normalizeRadarPlate_(blk.resourceId);
+        
+        if (todayMs >= startMs && todayMs < endMs) {
+          if (!vehicleRepairBlockMap[normPlate]) {
+            vehicleRepairBlockMap[normPlate] = {
+              reason: blk.reason || 'ส่งซ่อมบำรุง',
+              startMs: startMs,
+              endMs: endMs
+            };
+          }
+        } else if (todayMs < startMs) {
+          if (!vehicleUpcomingBlockMap[normPlate] || startMs < vehicleUpcomingBlockMap[normPlate].startMs) {
+            vehicleUpcomingBlockMap[normPlate] = {
+              reason: blk.reason || 'ส่งซ่อมบำรุง',
+              startMs: startMs,
+              startAt: blk.startAt
+            };
+          }
+        }
+      });
+    } catch (repairMapErr) {
+      Logger.log('vehicleRepairBlockMap build error: ' + repairMapErr.message);
+    }
 
     const vehicles = vehiclesRaw.map(function(v) {
       const plate = normalizeRadarPlate_(v.plate);
       const isActive = vStatusMap.hasOwnProperty(plate) ? vStatusMap[plate] : true;
       // 🍓 BERRY FIX: repair > busy > ready. isActive=false หมายถึงส่งซ่อมทันที ไม่ต้องเช็ค live
       const live = liveVehiclesMap[plate] || { status: 'ready', label: 'พร้อม' };
-      const vehStatus = !isActive ? 'repair' : live.status;
-      const vehLabel  = !isActive ? 'ส่งซ่อม' : live.label;
+      // FIX: ถ้า live Radar ยังไม่ถึงเวลา active แต่มี repair block วันนี้/กำลังจะมา → force repair
+      const repairBlock = vehicleRepairBlockMap[plate];
+      const upcomingRepair = vehicleUpcomingBlockMap[plate];
+      let vehStatus = !isActive ? 'repair' : live.status;
+      let vehLabel  = !isActive ? 'ส่งซ่อม' : live.label;
+      let vehReason = '';
+      if (vehStatus === 'ready' && repairBlock) {
+        vehStatus = 'repair';
+        vehLabel  = 'ส่งซ่อมบำรุง';
+        vehReason = repairBlock.reason || '';
+      }
+      if (vehStatus === 'repair' && !vehReason && live.job) vehReason = live.job;
+
+      let upcomingBadge = '';
+      if (isActive && vehStatus === 'ready') {
+        const todayMs = radarCtxShared.now ? radarCtxShared.now.getTime() : new Date().getTime();
+        let earliestUpcoming = Infinity;
+        let upcomingLabel = '';
+
+        if (upcomingRepair && upcomingRepair.startMs < earliestUpcoming) {
+          earliestUpcoming = upcomingRepair.startMs;
+          upcomingLabel = 'มีซ่อมบำรุง ' + Utilities.formatDate(upcomingRepair.startAt, 'Asia/Bangkok', 'HH:mm');
+        }
+
+        (radarCtxShared.approvedBookings || []).forEach(function(b) {
+          const plates = String(b.vehicleRaw || b.vehicle || '').split(/[,\n|\/]+/).map(normalizeRadarPlate_);
+          if (plates.indexOf(plate) !== -1) {
+            const startMs = b.startAt.getTime();
+            if (startMs > todayMs && startMs < earliestUpcoming) {
+              earliestUpcoming = startMs;
+              upcomingLabel = 'มีภารกิจ ' + Utilities.formatDate(b.startAt, 'Asia/Bangkok', 'HH:mm');
+            }
+          }
+        });
+
+        upcomingBadge = upcomingLabel;
+      }
+
       return {
         plate: plate, name: v.name, type: v.type, active: isActive,
         status: vehStatus, label: vehLabel,
-        available: isActive && (live.status === 'ready'),
-        badge: vehLabel
+        reason: vehReason,
+        available: isActive && (live.status === 'ready') && !repairBlock,
+        badge: vehLabel,
+        upcomingBadge: upcomingBadge
       };
     });
 
@@ -3842,6 +4713,7 @@ function _saveSettingValue_(key, value) {
   } else {
     sh.appendRow([key, value]); // Create New
   }
+  try { clearInitialCache_(); } catch (e) {}
 }
 
 function keepPhone(v) {
@@ -3985,11 +4857,23 @@ function cacheGet_(key) {
 }
 
 function cacheDelete_(key){ 
-  try{ 
-    CacheService.getScriptCache().remove(key); 
-  } catch(e){ 
-    Logger.log('Cache delete error: ' + e.toString());
-  } 
+  cacheDeleteLarge_(key);
+}
+
+function clearInitialCache_() {
+  cacheDeleteLarge_(INITIAL_DATA_CACHE_KEY);
+  Logger.log('CACHE CLEAR key=' + INITIAL_DATA_CACHE_KEY);
+  return true;
+}
+
+function clearInitialCache() {
+  try {
+    clearInitialCache_();
+    return { ok: true, key: INITIAL_DATA_CACHE_KEY };
+  } catch (e) {
+    Logger.log('clearInitialCache error: ' + (e && e.stack ? e.stack : e));
+    return { ok: false, error: (e && e.message) ? e.message : String(e) };
+  }
 }
 
 function cacheDelete(key) {
@@ -4003,9 +4887,102 @@ function cacheDelete(key) {
   }
 }
 
+// Chunks management to bypass 100KB Cache limit (e.g. payload is ~211KB)
+function cachePutLarge_(key, data, seconds) {
+  try {
+    const jsonStr = JSON.stringify(data);
+    const ttl = (typeof seconds === 'number' ? seconds : 120);
+    const cache = CacheService.getScriptCache();
+    cacheDeleteLarge_(key);
+    
+    if (jsonStr.length < 90000) {
+      cache.put(key, jsonStr, ttl);
+      cache.put(key + '_chunks', '0', ttl);
+      return;
+    }
+    
+    const chunkSize = 90000;
+    let index = 0;
+    let chunkCount = 0;
+    while (index < jsonStr.length) {
+      const chunk = jsonStr.substring(index, index + chunkSize);
+      cache.put(key + '_chunk_' + chunkCount, chunk, ttl);
+      chunkCount++;
+      index += chunkSize;
+    }
+    cache.put(key + '_chunks', String(chunkCount), ttl);
+    cache.remove(key); // Remove legacy direct key
+  } catch (e) {
+    Logger.log('[CacheLarge] Put Error: ' + e.toString());
+  }
+}
+
+function cacheGetLarge_(key) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const chunksVal = cache.get(key + '_chunks');
+    
+    if (!chunksVal) {
+      const raw = cache.get(key);
+      return raw ? JSON.parse(raw) : null;
+    }
+    
+    const chunkCount = parseInt(chunksVal);
+    if (chunkCount === 0) {
+      const raw = cache.get(key);
+      return raw ? JSON.parse(raw) : null;
+    }
+    
+    let jsonStr = '';
+    for (let i = 0; i < chunkCount; i++) {
+      const chunk = cache.get(key + '_chunk_' + i);
+      if (!chunk) return null; // Corrupted cache
+      jsonStr += chunk;
+    }
+    
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    Logger.log('[CacheLarge] Get Error: ' + e.toString());
+    return null;
+  }
+}
+
+function cacheDeleteLarge_(key) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const chunksVal = cache.get(key + '_chunks');
+    cache.remove(key);
+    cache.remove(key + '_chunks');
+    if (chunksVal) {
+      const chunkCount = parseInt(chunksVal);
+      for (let i = 0; i < chunkCount; i++) {
+        cache.remove(key + '_chunk_' + i);
+      }
+    }
+  } catch (e) {
+    Logger.log('[CacheLarge] Delete Error: ' + e.toString());
+  }
+}
+
+function readAllSettings_() {
+  const ss = SpreadsheetApp.getActive();
+  const sh = ss.getSheetByName('setting');
+  if(!sh) throw new Error("ไม่พบชีต setting");
+  const lastRow = sh.getLastRow();
+  const rows = sh.getRange(1, 1, lastRow, 2).getValues();
+  const settings = {};
+  for (let i = 0; i < rows.length; i++) {
+    const k = String(rows[i][0]).trim();
+    if (k) {
+      settings[k] = { row: i + 1, val: String(rows[i][1] || '') };
+    }
+  }
+  return settings;
+}
+
 
 // ===================== VEHICLE MANAGEMENT =====================
-function getAllVehiclePlatesFromSettings() {
+function getAllVehiclePlatesFromSettings(settings) {
   try {
     const ss = SpreadsheetApp.getActive();
     const sh = ss.getSheetByName(SHEET_VEHICLES);
@@ -4014,7 +4991,7 @@ function getAllVehiclePlatesFromSettings() {
     const lastRow = sh.getLastRow();
     if (lastRow < 2) return { ok:true, vans:[], trucks:[], all:[] };
 
-    const vs = sh.getRange(1,1,lastRow,sh.getLastColumn()).getDisplayValues();
+    const vs = _sheetApiGetValues_(sh, 1, 1, lastRow, sh.getLastColumn(), 'getAllVehiclePlatesFromSettings');
     const headers = vs[0].map(v => String(v||'').trim().toLowerCase());
 
     // 💖 Helper หา Index หัวตาราง (รองรับไทย/อังกฤษ)
@@ -4036,7 +5013,7 @@ function getAllVehiclePlatesFromSettings() {
     const tIdx = ixType  > -1 ? ixType  : 2;
 
     // อ่านสถานะซ่อมบำรุงจาก Setting (VehicleAvailability)
-    const vStatusKv = readSettingKV_('VehicleAvailability');
+    const vStatusKv = settings && settings['VehicleAvailability'] ? settings['VehicleAvailability'] : readSettingKV_('VehicleAvailability');
     const vStatusMap = parseBoolMap_(vStatusKv.val);
 
     const rows = vs.slice(1).filter(r => (r[pIdx] || '').trim());
@@ -4071,7 +5048,7 @@ function getDriversFromVehicles_() {
     var ss = SpreadsheetApp.getActive();
     var sh = ss.getSheetByName(SHEET_VEHICLES);
     if (!sh) throw new Error("Sheet 'Vehicles' not found");
-    var vs = sh.getDataRange().getDisplayValues();
+    var vs = _sheetApiGetValues_(sh, 1, 1, sh.getLastRow(), sh.getLastColumn(), 'getDriversFromVehicles_');
     if (vs.length < 2) return [];
 
     var headers = vs[0].map(function (v) { return String(v || '').trim().toLowerCase(); });
@@ -4635,8 +5612,7 @@ function __vb_htmlToPdfUrl__(filename, html) {
 // 2. API: รีเฟรชข้อมูล Dashboard (เคลียร์ Cache)
 function apiRefreshDashboard() {
   try {
-    const cacheKey = 'mainDataCache_v13_BerryFix'; // ต้องตรงกับที่ใช้ใน getMainData_
-    cacheDelete_(cacheKey);
+    clearInitialCache_();
     return _ok_({ message: 'Refreshed' });
   } catch (e) { 
     return _err_(e); 
@@ -5040,6 +6016,7 @@ function selfTestFuelReportUIFix() {
   Logger.log("--- SELF TEST: Fuel Report Modification ---");
   var fRes = apiGetFuelHistory();
   var allFuel = (fRes && fRes.ok) ? fRes.data : [];
+  
   Logger.log("STEP1: fuelData โหลดได้กี่ record: " + allFuel.length);
 
   var totalCost = 0, totalLiters = 0, summaryMap = {};
@@ -5075,7 +6052,7 @@ function selfTestFuelReportUIFix() {
 }
 
 // ===================== DRIVER MANAGEMENT =====================
-function getDriversFromAdmin_() {
+function getDriversFromAdmin_(settings) {
   try {
     const ss = SpreadsheetApp.getActive();
     const sh = ss.getSheetByName('Admin');
@@ -5089,7 +6066,7 @@ function getDriversFromAdmin_() {
       return { ok: true, drivers: [] };
     }
 
-    const vs = sh.getRange(1, 1, lastRow, lastCol).getDisplayValues();
+    const vs = _sheetApiGetValues_(sh, 1, 1, lastRow, lastCol, 'getDriversFromAdmin_');
     const headers = vs[0].map(h => String(h || '').trim().toLowerCase());
     const ixUser = headers.indexOf('username');
     const ixPass = headers.indexOf('password');
@@ -5104,7 +6081,7 @@ function getDriversFromAdmin_() {
       };
     }
 
-    const statusKv = readSettingKV_('DriverStatus');
+    const statusKv = settings && settings['DriverStatus'] ? settings['DriverStatus'] : readSettingKV_('DriverStatus');
     const statusMap = parseBoolMap_(statusKv.val);
 
     const allowedRoles = ['driver', 'admindriver'];
@@ -5157,6 +6134,14 @@ function thaiToArabic_(text) {
 
 function parseTimeSafe_(timeInput) {
   if (timeInput instanceof Date) return Utilities.formatDate(timeInput, TZ, 'HH:mm');
+  // FIX: Google Sheets serial time (dateTimeRenderOption:SERIAL_NUMBER) arrives as decimal fraction in [0,1).
+  // e.g. 0.3333 = 08:00, 0.5416 = 13:00. Must convert before string processing to avoid fallback to 00:00.
+  if (typeof timeInput === 'number' && timeInput >= 0 && timeInput < 1) {
+    var totalMins = Math.round(timeInput * 24 * 60);
+    var hh = Math.floor(totalMins / 60) % 24;
+    var mm = totalMins % 60;
+    return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+  }
   let s = thaiToArabic_(String(timeInput || '').trim()).toLowerCase();
   if (!s) return '00:00';
 
@@ -5652,6 +6637,19 @@ function isOverlapping_(startA, endA, startB, endB) {
   return startA < endB && endA > startB;
 }
 
+function formatVehicleUnavailableLabel_(reason) {
+  var r = String(reason || '').trim();
+  if (!r) return 'รถไม่ว่าง';
+  if (/ซ่อม|repair|maintenance|งดใช้|ส่งซ่อม/i.test(r)) return 'รถไม่ว่าง (ซ่อม)';
+  return 'รถไม่ว่าง';
+}
+
+function stripVehicleReasonDriverNotes_(reason) {
+  var r = String(reason || '').trim();
+  var idx = r.indexOf(' | ');
+  return idx > -1 ? r.substring(0, idx).trim() : r;
+}
+
 function getAvailableVehicles(payload) {
   try {
     if (!payload) throw new Error('ข้อมูลวันเวลาไม่ครบถ้วน');
@@ -5670,6 +6668,7 @@ function getAvailableVehicles(payload) {
     const endTime24 = parseTimeSafe_(payload.endTime);
     const reqStart = parseDateTime_(nd1, startTime24);
     const reqEnd = parseDateTime_(nd2, endTime24);
+    const nowMs = getServerNowBangkok_().getTime();
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sh = ss.getSheetByName(SHEET_MAIN_NAME);
@@ -5678,7 +6677,7 @@ function getAvailableVehicles(payload) {
     const lastRow = sh.getLastRow();
     const neededDataCols = [
       idx.bookingId, idx.status, idx.startDate, idx.startTime, idx.endDate, idx.endTime,
-      idx.vehicle, idx.driver, idx.project, idx.purpose
+      idx.vehicle, idx.driver, idx.project, idx.purpose, idx.workType
     ].filter(function(v) { return typeof v === 'number' && v >= 0; });
     const dataReadCols = neededDataCols.length ? (Math.max.apply(null, neededDataCols) + 1) : headers.length;
     const values = lastRow > 1
@@ -5706,6 +6705,10 @@ function getAvailableVehicles(payload) {
           bEnd = aEndObj.actualEndAtObj;
         }
 
+        if (bEnd && !isNaN(bEnd.getTime()) && bEnd.getTime() <= nowMs) {
+          continue;
+        }
+
         if (bStart && bEnd && isOverlapping_(reqStart, reqEnd, bStart, bEnd)) {
           const job = clean(row[idx.project] || row[idx.purpose] || 'ติดงาน');
 
@@ -5717,12 +6720,19 @@ function getAvailableVehicles(payload) {
             });
           }
 
-          const dCell = clean(row[idx.driver]);
-          if (dCell) {
-            dCell.split(',').forEach(function(d) {
-              const name = clean(d);
-              if (name) busyDriversMap[name] = job;
-            });
+          // skip driver marking จาก booking row ที่เป็นงานซ่อม
+          // Availability sheet handle driver scope แบบ per-phase (dropoff/pickup/pickup_support)
+          const workTypeRaw = clean(idx.workType >= 0 ? row[idx.workType] : '');
+          const purposeRaw  = clean(row[idx.project] || row[idx.purpose] || '');
+          const isRepairJob = /ซ่อม|repair|maintenance|ส่งซ่อม/i.test(workTypeRaw + '|' + purposeRaw);
+          if (!isRepairJob) {
+            const dCell = clean(row[idx.driver]);
+            if (dCell) {
+              dCell.split(',').forEach(function(d) {
+                const name = normalizeRadarName_(clean(d)) || clean(d);
+                if (name) busyDriversMap[name] = job;
+              });
+            }
           }
         }
       }
@@ -5765,39 +6775,45 @@ function getAvailableVehicles(payload) {
       const availData = _sheetApiGetValues_(shAvail, 1, 1, availLastRow, availLastCol, 'getAvailableVehicles availability rows');
       const avHeaders = availData[0];
       const avStatusIdx = avHeaders.indexOf('status');
+      const avTripPhaseIdx = avHeaders.indexOf('tripPhase');
 
       for (let i = 1; i < availData.length; i++) {
-        const resType = clean(availData[i][0]);
-        const resId   = clean(availData[i][1]);
-        const reason  = clean(availData[i][6]);
+        const resTypeLc = clean(availData[i][0]).toLowerCase();
+        const resId     = clean(availData[i][1]);
+        const reason    = clean(availData[i][6]);
         const avStatus = (avStatusIdx > -1) ? String(availData[i][avStatusIdx] || '').trim().toLowerCase() : '';
+        const avTripPhase = (avTripPhaseIdx > -1) ? clean(availData[i][avTripPhaseIdx]).toLowerCase() : '';
 
-        // 🍓 BERRY FIX: Ignore closed blocks in availability check
         if (avStatus === 'closed') continue;
+        if (resTypeLc !== 'vehicle' && resTypeLc !== 'driver') continue;
 
-        // 🍓 BERRY FIX: ใช้ parseAvailDate_ / parseAvailTime_ แทน parseDateTime_ ตรงๆ
         const bStart = parseDateTime_(
           parseAvailDate_(availData[i][2]),
           parseAvailTime_(availData[i][3])
         );
-        const bEnd = parseDateTime_(
+        let bEnd = parseDateTime_(
           parseAvailDate_(availData[i][4]) || parseAvailDate_(availData[i][2]),
           parseAvailTime_(availData[i][5])
         );
+        bEnd = normalizeDriverTripPhaseEnd_(resTypeLc, avTripPhase, bStart, bEnd);
 
-        // selfTest log
         Logger.log('[AdminPanel] Avail row ' + i +
-          ' type=' + resType + ' id=' + resId +
+          ' type=' + resTypeLc + ' id=' + resId +
           ' bStart=' + (bStart ? Utilities.formatDate(bStart, tz, 'yyyy-MM-dd HH:mm') : 'NULL') +
           ' bEnd='   + (bEnd   ? Utilities.formatDate(bEnd,   tz, 'yyyy-MM-dd HH:mm') : 'NULL') +
           ' overlap=' + (bStart && bEnd ? isOverlapping_(reqStart, reqEnd, bStart, bEnd) : 'SKIP')
         );
 
+        if (bEnd && !isNaN(bEnd.getTime()) && bEnd.getTime() <= reqStart.getTime()) {
+          continue;
+        }
+
         if (bStart && bEnd && isOverlapping_(reqStart, reqEnd, bStart, bEnd)) {
-          if (resType === 'vehicle') {
+          if (resTypeLc === 'vehicle') {
             busyPlatesMap[resId] = reason || 'งดใช้/ซ่อมบำรุง 🔧';
-          } else if (resType === 'driver') {
-            busyDriversMap[resId] = reason || 'ลางาน/พักงาน';
+          } else if (resTypeLc === 'driver') {
+            const driverKey = normalizeRadarName_(resId) || resId;
+            busyDriversMap[driverKey] = reason || 'ลางาน/พักงาน';
           }
         }
       }
@@ -5811,6 +6827,11 @@ function getAvailableVehicles(payload) {
     const vehicleStatus = (vehiclesRes.ok ? vehiclesRes.all : []).map(function(v) {
       const p = clean(v.plate);
       const isManualActive = vStatusMap.hasOwnProperty(p) ? vStatusMap[p] : true;
+      const plateBusyReason = busyPlatesMap[p];
+
+      if (plateBusyReason && typeof plateBusyReason === 'string' && /หมดเวลา|พ้นเวลา|expired|past|เลยเวลา/i.test(plateBusyReason)) {
+        delete busyPlatesMap[p];
+      }
 
       if (!isManualActive) {
         return {
@@ -5824,13 +6845,15 @@ function getAvailableVehicles(payload) {
       }
 
       if (busyPlatesMap[p]) {
+        const reasonText = busyPlatesMap[p];
         return {
           plate: p,
           name: v.name,
           type: v.type,
           active: true,
           available: false,
-          badge: busyPlatesMap[p]
+          badge: formatVehicleUnavailableLabel_(reasonText),
+          busyDetail: stripVehicleReasonDriverNotes_(reasonText)
         };
       }
 
@@ -5847,15 +6870,16 @@ function getAvailableVehicles(payload) {
     const driversRes = includeDrivers ? getDriversFromAdmin_() : { ok: true, drivers: [] };
     const driverList = (driversRes.ok ? driversRes.drivers : []).map(function(d) {
       const name = clean(typeof d === 'object' ? d.name : d);
+      const normName = normalizeRadarName_(name) || name;
       const isManualActive = dStatusMap.hasOwnProperty(name) ? dStatusMap[name] : true;
-      const busyJob = busyDriversMap[name];
+      const busyJob = busyDriversMap[normName] || busyDriversMap[name];
 
       if (!isManualActive) {
         return {
           name: name,
           active: false,
           busyBadge: 'พักงาน',
-          isBusy: true
+          isBusy: false
         };
       }
 
@@ -5994,7 +7018,10 @@ function getTimelineData(payload) {
 }
 // ===================== EXPORT FUNCTIONS =====================
 function getWebAppInitialData() {
-  return getMainData_();
+  var payload = arguments && arguments.length ? (arguments[0] || {}) : {};
+  return getMainData_({
+    forceRefresh: payload.forceRefresh === true || payload.skipCache === true
+  });
 }
 
 function ping() {
@@ -6116,7 +7143,7 @@ function apiUserCancelBooking(payload) {
     }
 
     _sheetApiUpdateValues_(sheet, rowIndex, 1, [rowData], { label: 'apiUserCancelBooking row update' });
-    try { cacheDelete_('mainDataCache_v13_BerryFix'); } catch(e) {}
+    try { clearInitialCache_(); } catch(e) {}
 
     // 📢 ส่วนแจ้งเตือน Telegram
     if (!noTelegram) {
@@ -6611,23 +7638,30 @@ function _saveBase64File_(base64Data, fileName) {
   }
 }
 
-// 🍓 BERRY FIX: จัดการ Header ใหม่ให้ตรง Schema เสมอ
+// 🍓 BERRY FIX: จัดการ Header ใหม่ให้ตรง Schema เสมอ และซ่อมแซมคอลัมน์ที่ว่าง/ขาดหายให้ถูกตำแหน่ง ป้องกันคอลัมน์เลื่อน
 function syncFuelHeaders_(sh) {
   Logger.log("STEP1: ตรวจ header sheet Fuel");
-  const schema =['FuelLogID', 'BookingID', 'Plate', 'JobType', 'ProjectName', 'Driver', 'StartFuelLevel', 'EndFuelLevel', 'Liters', 'PricePerLiter', 'Cost', 'BudgetType', 'Remark', 'Timestamp', 'Month', 'ReceiptURL'];
-  let headers =[];
-  if (sh.getLastRow() >= 1) headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => String(h).trim());
+  const schema = ['FuelLogID', 'BookingID', 'Plate', 'JobType', 'ProjectName', 'Driver', 'StartFuelLevel', 'EndFuelLevel', 'Liters', 'PricePerLiter', 'Cost', 'BudgetType', 'Remark', 'Timestamp', 'Month', 'ReceiptURL'];
+  let headers = [];
+  if (sh.getLastRow() >= 1) {
+    headers = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), schema.length)).getValues()[0].map(h => String(h || '').trim());
+  }
   
   let changed = false;
-  schema.forEach(req => {
-    if (!headers.includes(req)) {
-      headers.push(req);
+  
+  // ซ่อมแซมและจัดตำแหน่งของคอลัมน์ให้ตรงตาม Schema เสมอ
+  for (let i = 0; i < schema.length; i++) {
+    if (i >= headers.length) {
+      headers.push(schema[i]);
+      changed = true;
+    } else if (!headers[i] || headers[i] === '') {
+      headers[i] = schema[i];
       changed = true;
     }
-  });
+  }
 
   if (changed) {
-    Logger.log("STEP2: ตรวจว่าคอลัมน์ที่ขาดถูกสร้างเพิ่มได้จริง");
+    Logger.log("STEP2: ตรวจว่าคอลัมน์ที่ขาดหรือว่างถูกซ่อมแซมได้จริง");
     sh.getRange(1, 1, 1, headers.length).setValues([headers]);
     sh.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#f1f5f9");
   }
@@ -6747,6 +7781,13 @@ function apiGetFuelHistory() {
       else if (rawDate && !isNaN(new Date(rawDate).getTime())) dateObj = new Date(rawDate);
 
       if (dateObj) {
+        // Normalize year to Gregorian (AD) if in Buddhist Era (BE)
+        const yFull = dateObj.getFullYear();
+        if (yFull >= 2400) {
+          const normalizedDate = new Date(dateObj.getTime());
+          normalizedDate.setFullYear(yFull - 543);
+          dateObj = normalizedDate;
+        }
         const y = parseInt(Utilities.formatDate(dateObj, tz, 'yyyy'));
         dateStr = Utilities.formatDate(dateObj, tz, 'dd/MM/') + ((y < 2400) ? y + 543 : y) + ' ' + Utilities.formatDate(dateObj, tz, 'HH:mm') + ' น.';
       }
@@ -6783,31 +7824,44 @@ function getDashboardFuelLevels() {
     var lastRow = sh.getLastRow();
     if (lastRow < 2) return { ok: true, data: [] };
 
-    var vals = sh.getRange(2, 1, lastRow - 1, 16).getValues();
+    const sync = syncFuelHeaders_(sh);
+    const map = sync.map;
+    const headers = sync.headers;
+
+    var vals = sh.getRange(2, 1, lastRow - 1, headers.length).getValues();
     var tz = Session.getScriptTimeZone() || 'Asia/Bangkok';
 
     // Group by Plate → เลือก record ล่าสุดจาก Timestamp
     var plateMap = {};
 
     for (var i = 0; i < vals.length; i++) {
-      var plate = String(vals[i][2] || '').trim();   // Col C: Plate
+      var plate = String(vals[i][map['Plate']] || '').trim();   // Dynamic mapping for Plate
       if (!plate) continue;
 
-      var rawEnd = vals[i][6];                        // Col G: EndFuelLevel
-      var rawTs  = vals[i][9];                        // Col J: Timestamp
+      var rawEnd = vals[i][map['EndFuelLevel']];                // Dynamic mapping for EndFuelLevel
+      var rawTs  = vals[i][map['Timestamp']];                   // Dynamic mapping for Timestamp
 
       // Parse timestamp
       var tsMs = 0;
       var dateObj = null;
       if (rawTs instanceof Date && !isNaN(rawTs.getTime())) {
         dateObj = rawTs;
-        tsMs = rawTs.getTime();
       } else if (rawTs) {
         var parsed = new Date(rawTs);
         if (!isNaN(parsed.getTime())) {
           dateObj = parsed;
-          tsMs = parsed.getTime();
         }
+      }
+
+      if (dateObj) {
+        // Normalize year to Gregorian (AD) if in Buddhist Era (BE)
+        var yFull = dateObj.getFullYear();
+        if (yFull >= 2400) {
+          var normalizedDate = new Date(dateObj.getTime());
+          normalizedDate.setFullYear(yFull - 543);
+          dateObj = normalizedDate;
+        }
+        tsMs = dateObj.getTime();
       }
 
       // เลือก record ที่ Timestamp ใหม่สุดต่อ Plate
@@ -7371,6 +8425,54 @@ function apiUpdateBookingStatus(payload) {
     var oldRowVals = data[foundOffset] ? data[foundOffset].slice() : [];
     var rowObj = buildRowObj(oldRowVals);
 
+    // Guard: กันการกด "อนุมัติ" ซ้ำโดยข้อมูลมอบหมายไม่เปลี่ยนจริง
+    if (newStatus === 'approved') {
+      var currentStatus = String((idx.status !== undefined ? oldRowVals[idx.status] : '') || '').toLowerCase().trim();
+      var requestedCount = null;
+      if (payload.vehicleCount != null && payload.vehicleCount !== '') {
+        var reqVc = parseInt(payload.vehicleCount, 10);
+        if (isFinite(reqVc) && reqVc > 0) requestedCount = reqVc;
+      }
+
+      var nextStatusVal = newStatus;
+      var nextReasonVal = (idx.reason !== undefined) ? oldRowVals[idx.reason] : '';
+      var nextVehicleCountVal = (idx.vehicleCount !== undefined) ? oldRowVals[idx.vehicleCount] : '';
+      var nextVehicleVal = (idx.vehicle !== undefined) ? oldRowVals[idx.vehicle] : '';
+      var nextDriverVal = (idx.driver !== undefined) ? oldRowVals[idx.driver] : '';
+
+      if (idx.reason !== undefined && reasonText) nextReasonVal = reasonText;
+      if (idx.vehicleCount !== undefined && requestedCount != null) nextVehicleCountVal = requestedCount;
+      if (idx.vehicle !== undefined && vehiclesStr) nextVehicleVal = vehiclesStr;
+      if (idx.driver !== undefined && driversStr) nextDriverVal = driversStr;
+
+      function normCompare(v) {
+        if (v == null) return '';
+        return String(v).trim();
+      }
+
+      var isNoEffectiveChange =
+        currentStatus === 'approved' &&
+        normCompare(currentStatus) === normCompare(nextStatusVal) &&
+        normCompare((idx.reason !== undefined) ? oldRowVals[idx.reason] : '') === normCompare(nextReasonVal) &&
+        normCompare((idx.vehicleCount !== undefined) ? oldRowVals[idx.vehicleCount] : '') === normCompare(nextVehicleCountVal) &&
+        normCompare((idx.vehicle !== undefined) ? oldRowVals[idx.vehicle] : '') === normCompare(nextVehicleVal) &&
+        normCompare((idx.driver !== undefined) ? oldRowVals[idx.driver] : '') === normCompare(nextDriverVal);
+
+      if (isNoEffectiveChange) {
+        return {
+          ok: true,
+          id: bookingId,
+          status: newStatus,
+          actualCount: normCompare(nextVehicleCountVal),
+          testMode: testMode,
+          noTelegram: noTelegram,
+          telegram: null,
+          skipped: true,
+          skipReason: 'approved_unchanged'
+        };
+      }
+    }
+
     // 🍓 [BERRY FIX] ตรวจสอบคิวรถและคนขับชนกัน (Conflict Check) ก่อนบันทึกลงชีต
     if (newStatus === 'approved') {
       if (idx.startDate === undefined) idx.startDate = colIndexByName('วันเริ่มต้น');
@@ -7450,7 +8552,7 @@ function apiUpdateBookingStatus(payload) {
     }
 
     // 🍓 BERRY FIX: clear cache ให้หน้าบ้านดึงข้อมูลสถานะล่าสุดเสมอ
-    try { cacheDelete_('mainDataCache_v13_BerryFix'); } catch (eCache) {}
+    try { clearInitialCache_(); } catch (eCache) {}
 
     // ให้แน่ใจว่าค่าถูกเขียนแล้วก่อนอ่านกลับ
     _sheetApiUpdateValues_(sheet, rowIndex, 1, [oldRowVals], { label: 'apiUpdateBookingStatus row update' });
@@ -7978,6 +9080,7 @@ function specialApproveBooking(payload) {
     rowData[idx.v] = plate;
     rowData[idx.d] = driverName;
     _sheetApiUpdateValues_(sh, rowIndex, 1, [rowData], { label: 'specialApproveBooking row update' });
+    try { clearInitialCache_(); } catch (e) {}
 
     Logger.log('[specialApproveBooking] sheet updated bookingId=' + bookingId + ', plate=' + plate + ', driver=' + driverName);
 
@@ -8034,7 +9137,7 @@ function specialApproveBooking(payload) {
 function _getAvailabilitySheet() {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName('Availability');
-  var expectedHeaders = ['resourceType','resourceId','startDate','startTime','endDate','endTime','reason','createdBy','createdAt','assignedDriver','status','closedBy','closedAt','closeNote'];
+  var expectedHeaders = ['resourceType','resourceId','startDate','startTime','endDate','endTime','reason','createdBy','createdAt','assignedDriver','status','closedBy','closedAt','closeNote','tripPhase'];
   if(!sh) {
     sh = ss.insertSheet('Availability');
     _sheetApiUpdateValues_(sh, 1, 1, [expectedHeaders], { label: '_getAvailabilitySheet init headers', valueInputOption: 'RAW' });
@@ -8063,13 +9166,14 @@ function createAvailabilityBlock(payload) {
     var sh = _getAvailabilitySheet();
     var headers = _sheetApiGetValues_(sh, 1, 1, 1, sh.getLastColumn(), 'createAvailabilityBlock headers')[0];
     var assignedDriverColIndex = headers.indexOf('assignedDriver');
+    var tripPhaseColIndex = headers.indexOf('tripPhase');
     
     var rowData = [
       payload.resourceType || '', 
       payload.resourceId || '',
-      parseDateToISO_(payload.startDate), 
+      sheetDateTextForCell(payload.startDate),  // FIX: text dd/MM/yyyy
       parseTimeSafe_(payload.startTime),
-      parseDateToISO_(payload.endDate), 
+      sheetDateTextForCell(payload.endDate || payload.startDate),  // FIX: text dd/MM/yyyy
       parseTimeSafe_(payload.endTime),
       payload.reason || '', 
       payload.createdBy || '', 
@@ -8083,8 +9187,13 @@ function createAvailabilityBlock(payload) {
       }
       rowData[assignedDriverColIndex] = payload.assignedDriver || '';
     }
+    if (tripPhaseColIndex > -1) {
+      while (rowData.length < tripPhaseColIndex) rowData.push('');
+      rowData[tripPhaseColIndex] = payload.tripPhase || '';
+    }
 
     _sheetApiAppendRow_(sh, rowData, { label: 'createAvailabilityBlock append' });
+    try { clearInitialCache_(); } catch (e) {}
     return {ok:true};
   } catch(e) { return {ok:false, error:e.message}; }
   finally { lock.releaseLock(); }
@@ -8124,7 +9233,14 @@ function closeAvailabilityBlock(payload) {
       closedBy: headers.indexOf('closedBy'),
       closedAt: headers.indexOf('closedAt'),
       closeNote: headers.indexOf('closeNote'),
-      bookingId: headers.indexOf('bookingId')
+      bookingId: headers.indexOf('bookingId'),
+      startDate: headers.indexOf('startDate'),
+      startTime: headers.indexOf('startTime'),
+      endDate: headers.indexOf('endDate'),
+      endTime: headers.indexOf('endTime'),
+      createdBy: headers.indexOf('createdBy'),
+      createdAt: headers.indexOf('createdAt'),
+      tripPhase: headers.indexOf('tripPhase')
     };
 
     if (col.status === -1) throw new Error('Availability ไม่มีคอลัมน์ status');
@@ -8135,16 +9251,124 @@ function closeAvailabilityBlock(payload) {
     var nowThai = typeof _fmtThaiDateTimeBE_ === 'function' ? _fmtThaiDateTimeBE_(now) : Utilities.formatDate(now, tz, 'dd/MM/yyyy HH:mm น.');
     var nowISO = Utilities.formatDate(now, tz, "yyyy-MM-dd'T'HH:mm:ssXXX");
     
+    function cellText_(row, idx) {
+      return idx > -1 ? String(row[idx] || '').trim() : '';
+    }
+
+    function cellKey_(row, idx) {
+      if (idx < 0) return '';
+      var v = row[idx];
+      if (v && Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+        return String(v.getTime());
+      }
+      return String(v == null ? '' : v).trim();
+    }
+
+    function syntheticBookingId_(rowIndex) {
+      return 'BLK-' + rowIndex;
+    }
+
+    function rowBookingId_(row, rowIndex) {
+      return (col.bookingId > -1 && row[col.bookingId])
+        ? String(row[col.bookingId]).trim()
+        : syntheticBookingId_(rowIndex);
+    }
+
+    function isRepairTripPhase_(phase) {
+      return /^(repair|dropoff|pickup|pickup_support)$/.test(String(phase || '').trim().toLowerCase());
+    }
+
+    var targetRowIndex = -1;
+    var targetRow = null;
+    for (var t = 1; t < data.length; t++) {
+      if (rowBookingId_(data[t], t) === bookingId) {
+        targetRowIndex = t;
+        targetRow = data[t];
+        break;
+      }
+    }
+
+    var closeRepairGroup = false;
+    var targetCreatedAtKey = '';
+    var targetCreatedByKey = '';
+    if (targetRow) {
+      var targetResourceType = cellText_(targetRow, col.resourceType).toLowerCase();
+      var targetTripPhase = cellText_(targetRow, col.tripPhase).toLowerCase();
+      closeRepairGroup = col.bookingId === -1 && targetResourceType === 'vehicle' && targetTripPhase === 'repair';
+      targetCreatedAtKey = cellKey_(targetRow, col.createdAt);
+      targetCreatedByKey = cellKey_(targetRow, col.createdBy);
+    }
+
+    function shouldCloseRow_(row, rowIndex) {
+      if (rowBookingId_(row, rowIndex) === bookingId) return true;
+      if (!closeRepairGroup) return false;
+      if (!targetCreatedAtKey || cellKey_(row, col.createdAt) !== targetCreatedAtKey) return false;
+      if (targetCreatedByKey && cellKey_(row, col.createdBy) !== targetCreatedByKey) return false;
+      return isRepairTripPhase_(cellText_(row, col.tripPhase));
+    }
+
+    function buildClosedItem_(row) {
+      return {
+        bookingId: bookingId,
+        resourceType: cellText_(row, col.resourceType),
+        resourceId: cellText_(row, col.resourceId),
+        reason: cellText_(row, col.reason),
+        assignedDriver: cellText_(row, col.assignedDriver),
+        startDate: col.startDate > -1 ? parseDateToISO_(row[col.startDate]) : '',
+        startTime: col.startTime > -1 ? parseTimeSafe_(row[col.startTime]) : '',
+        endDate: col.endDate > -1 ? (parseDateToISO_(row[col.endDate]) || parseDateToISO_(row[col.startDate])) : '',
+        endTime: col.endTime > -1 ? parseTimeSafe_(row[col.endTime]) : '',
+        createdBy: cellText_(row, col.createdBy),
+        tripPhase: cellText_(row, col.tripPhase),
+        closedAtISO: nowISO,
+        closedAtText: nowThai,
+        closeNote: closeNote
+      };
+    }
+
+    function buildAvailabilityNotifyObject_(item) {
+      item = item || {};
+      var isVehicle = String(item.resourceType || '').toLowerCase() === 'vehicle';
+      var note = String(item.closeNote || closeNote || '').trim();
+      return {
+        bookingId: bookingId,
+        id: bookingId,
+        status: 'approved',
+        notifyEvent: 'early_close',
+        name: item.createdBy || closedBy || 'Admin',
+        workType: isVehicle ? 'ส่งซ่อมบำรุง' : 'งานย่อยส่งซ่อม',
+        workName: item.reason || 'ส่งซ่อมบำรุง',
+        project: item.reason || 'ส่งซ่อมบำรุง',
+        place: isVehicle ? 'รายการรถซ่อมหลัก' : 'รายการงานย่อยของงานซ่อม',
+        startDate: item.startDate || '',
+        startTime: item.startTime || '',
+        endDate: item.endDate || item.startDate || '',
+        endTime: item.endTime || '',
+        vehicle: isVehicle ? item.resourceId : '',
+        plate: isVehicle ? item.resourceId : '',
+        driver: item.assignedDriver || '',
+        passengers: '0',
+        carType: 'รถราชการ',
+        vehicleCount: isVehicle && item.resourceId ? '1' : '0',
+        reason: note,
+        Reason: note,
+        actualEndAt: nowISO,
+        actualEndTime: nowThai,
+        closedBy: closedBy
+      };
+    }
+
     var updated = 0;
     var closedRows =[];
     var lastClosedItem = null;
+    var mainClosedItem = null;
 
     for (var i = 1; i < data.length; i++) {
       // 🍓 BERRY FIX: ถ้าไม่มีคอลัมน์ bookingId ให้ต่อ String BLK- เข้ากับ index (Fallback)
-      var rowBookingId = (col.bookingId > -1 && data[i][col.bookingId]) ? String(data[i][col.bookingId]).trim() : ('BLK-' + i);
+      var rowBookingId = rowBookingId_(data[i], i);
       var rowStatus = col.status > -1 ? String(data[i][col.status] || '').trim().toLowerCase() : '';
 
-      if (rowBookingId !== bookingId) continue;
+      if (!shouldCloseRow_(data[i], i)) continue;
       if (rowStatus === 'closed') continue;
 
       if (col.status > -1) data[i][col.status] = 'closed';
@@ -8156,16 +9380,10 @@ function closeAvailabilityBlock(payload) {
 
       updated++;
 
-      lastClosedItem = {
-        bookingId: bookingId,
-        resourceType: col.resourceType > -1 ? String(data[i][col.resourceType] || '').trim() : '',
-        resourceId: col.resourceId > -1 ? String(data[i][col.resourceId] || '').trim() : '',
-        reason: col.reason > -1 ? String(data[i][col.reason] || '').trim() : '',
-        assignedDriver: col.assignedDriver > -1 ? String(data[i][col.assignedDriver] || '').trim() : '',
-        closedAtISO: nowISO, // 🍓 ส่งกลับเป็น String
-        closedAtText: nowThai,
-        closeNote: closeNote
-      };
+      lastClosedItem = buildClosedItem_(data[i]);
+      if (i === targetRowIndex || (!mainClosedItem && String(lastClosedItem.tripPhase || '').toLowerCase() === 'repair')) {
+        mainClosedItem = lastClosedItem;
+      }
 
       closedRows.push(i + 1);
     }
@@ -8176,15 +9394,60 @@ function closeAvailabilityBlock(payload) {
       throw new Error('ไม่พบ Availability row ที่ยังเปิดอยู่สำหรับ bookingId: ' + bookingId);
     }
 
-    try { cacheDelete_('mainDataCache_v13_BerryFix'); } catch (e) {}
+    try { clearInitialCache_(); } catch (e) {}
 
-    // 🍓 BERRY FIX: ปิดงานลางาน ไม่ส่ง Telegram ยกเว้นโดน Force มา
+    var notifyResult = null;
+
+    // ปิดงานก่อนเวลาจากงานจองต้องแจ้ง Telegram เสมอ เว้นแต่ caller ตั้ง noTelegram ชัดเจน
     if (!noTelegram) {
       try {
-        if (typeof sendTelegramAvailabilityClosed_ === 'function') {
-          sendTelegramAvailabilityClosed_(lastClosedItem);
+        var bookingObj = null;
+
+        var notifyItem = mainClosedItem || lastClosedItem;
+        var isSyntheticBlockId = /^BLK-\d+$/i.test(bookingId);
+
+        if (!isSyntheticBlockId && typeof getBookingById === 'function') {
+          var bookingRes = getBookingById(bookingId);
+          if (bookingRes && bookingRes.ok && bookingRes.data) {
+            bookingObj = bookingRes.data;
+          }
         }
-      } catch (tgErr) {}
+
+        if (!isSyntheticBlockId && !bookingObj && typeof getById === 'function') {
+          var fallbackRes = getById(bookingId);
+          if (fallbackRes && fallbackRes.ok && fallbackRes.data) {
+            bookingObj = fallbackRes.data;
+          }
+        }
+
+        if (!bookingObj && notifyItem) {
+          bookingObj = buildAvailabilityNotifyObject_(notifyItem);
+        }
+
+        if (!bookingObj) {
+          bookingObj = { bookingId: bookingId, status: 'approved' };
+        }
+
+        bookingObj.bookingId = bookingObj.bookingId || bookingObj.id || bookingId;
+        bookingObj.id = bookingObj.id || bookingId;
+        bookingObj.status = bookingObj.status || bookingObj['สถานะ'] || 'approved';
+        bookingObj.actualEndAt = nowISO;
+        bookingObj.actualEndTime = nowThai;
+        bookingObj['เวลาปิดงานจริง'] = nowThai;
+        bookingObj.reason = closeNote;
+        bookingObj.Reason = closeNote;
+        bookingObj.closedBy = closedBy;
+        bookingObj.notifyEvent = 'early_close';
+
+        if (typeof sendTelegramNotify === 'function') {
+          notifyResult = sendTelegramNotify(bookingObj, false);
+          Logger.log('[EarlyClose] Telegram Result bookingId=' + bookingId + ' => ' + JSON.stringify(notifyResult));
+        } else if (typeof sendTelegramAvailabilityClosed_ === 'function') {
+          notifyResult = sendTelegramAvailabilityClosed_(lastClosedItem);
+        }
+      } catch (tgErr) {
+        Logger.log('[EarlyClose] Telegram Error: ' + (tgErr && tgErr.message ? tgErr.message : tgErr));
+      }
     }
 
     Logger.log('[EarlyClose] STEP5 success bookingId=' + bookingId + ' closedAt=' + nowThai);
@@ -8196,7 +9459,8 @@ function closeAvailabilityBlock(payload) {
       closedAtISO: nowISO, // ห้ามส่ง now ตรงๆ
       closedAtText: nowThai,
       closeNote: closeNote,
-      noTelegram: true,
+      noTelegram: noTelegram,
+      telegram: notifyResult,
       item: lastClosedItem
     };
 
@@ -8212,42 +9476,174 @@ function saveMaintenanceAvailability(payload) {
   try {
     var sh = _getAvailabilitySheet();
     var headers = _sheetApiGetValues_(sh, 1, 1, 1, sh.getLastColumn(), 'saveMaintenanceAvailability headers')[0];
-    var assignedDriverColIndex = headers.indexOf('assignedDriver');
     var timestamp = new Date();
-    var baseRow = [
-      '', '', // resourceType, resourceId (to be filled)
-      parseDateToISO_(payload.startDate), 
-      parseTimeSafe_(payload.startTime),
-      parseDateToISO_(payload.endDate), 
-      parseTimeSafe_(payload.endTime),
-      payload.reason || 'ซ่อม', 
-      payload.createdBy || '', 
-      timestamp
-    ];
-    if (assignedDriverColIndex > -1) {
-      while (baseRow.length < assignedDriverColIndex) baseRow.push('');
-      baseRow[assignedDriverColIndex] = payload.assignedDriver || '';
+    var repairMode = String(payload.repairMode || 'one_day').trim();
+    var dropoffMethod = String(payload.dropoffMethod || 'internal_driver').trim();
+    var pickupDeliveryType = String(payload.pickupDeliveryType || 'internal_driver').trim();
+
+    function addMinutesToTime_(timeText, minutes) {
+      var t = parseTimeSafe_(timeText || '00:00');
+      var parts = String(t || '00:00').split(':');
+      var total = (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0) + (parseInt(minutes, 10) || 0);
+      total = Math.max(0, Math.min((23 * 60) + 59, total));
+      var h = Math.floor(total / 60);
+      var m = total % 60;
+      return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+    }
+
+    function ensureDriverPhaseEndTime_(startTime, endTime) {
+      var start = parseTimeSafe_(startTime || '00:00');
+      var end = parseTimeSafe_(endTime || '');
+      if (!end || end === '00:00') return addMinutesToTime_(start, 59);
+      var sParts = String(start).split(':');
+      var eParts = String(end).split(':');
+      var sTotal = (parseInt(sParts[0], 10) || 0) * 60 + (parseInt(sParts[1], 10) || 0);
+      var eTotal = (parseInt(eParts[0], 10) || 0) * 60 + (parseInt(eParts[1], 10) || 0);
+      return eTotal > sTotal ? end : addMinutesToTime_(start, 59);
+    }
+
+    function buildRow_(opts) {
+      var row = new Array(headers.length).fill('');
+      function set_(name, value) {
+        var idx = headers.indexOf(name);
+        if (idx > -1) row[idx] = value;
+      }
+      var startTimeValue = parseTimeSafe_(opts.startTime || payload.startTime);
+      var endTimeValue = parseTimeSafe_(opts.endTime || payload.endTime);
+      var phase = String(opts.tripPhase || '').trim().toLowerCase();
+      if (opts.resourceType === 'driver' && (phase === 'dropoff' || phase === 'pickup' || phase === 'pickup_support')) {
+        endTimeValue = ensureDriverPhaseEndTime_(startTimeValue, endTimeValue);
+      }
+      set_('resourceType', opts.resourceType || '');
+      set_('resourceId', opts.resourceId || '');
+      set_('startDate', sheetDateTextForCell(opts.startDate || payload.startDate));
+      set_('startTime', startTimeValue);
+      set_('endDate', sheetDateTextForCell(opts.endDate || payload.endDate || payload.startDate));
+      set_('endTime', endTimeValue);
+      set_('reason', opts.reason || payload.reason || 'ซ่อม');
+      set_('createdBy', payload.createdBy || '');
+      set_('createdAt', timestamp);
+      set_('assignedDriver', opts.assignedDriver || '');
+      set_('tripPhase', opts.tripPhase || '');
+      return row;
     }
 
     var rows = [];
-    // 1. Vehicle Block
-    var vRow = baseRow.slice();
-    vRow[0] = 'vehicle';
-    vRow[1] = payload.vehiclePlate || payload.resourceId || '';
-    rows.push(vRow);
+    function normalizeDriverName_(name) {
+      return String(name || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    function buildAssignedDriverText_(dropoff, pickup) {
+      var d1 = normalizeDriverName_(dropoff);
+      var d2 = normalizeDriverName_(pickup);
+      if (d1 && d2 && d1 !== d2) return d1 + ' / ' + d2;
+      return d1 || d2 || '';
+    }
+    function buildRepairReason_() {
+      var baseReason = String(payload.reason || 'ซ่อม').trim();
+      var externalPickupBy = String(payload.externalPickupBy || '').replace(/\s+/g, ' ').trim();
+      var deliveredBy = String(payload.pickupDeliveredBy || '').replace(/\s+/g, ' ').trim();
+      var supportDriver = normalizeDriverName_(payload.supportDriver);
+      var notes = [];
+      if (repairMode === 'service_center' && dropoffMethod === 'repair_center_pickup' && externalPickupBy) {
+        notes.push('ศูนย์มารับรถ: ' + externalPickupBy);
+      }
+      if (repairMode === 'service_center' && pickupDeliveryType === 'repair_center_delivery' && deliveredBy) {
+        notes.push('ศูนย์นำรถมาส่ง: ' + deliveredBy);
+      }
+      if (repairMode === 'service_center' && pickupDeliveryType === 'internal_driver' && supportDriver) {
+        notes.push('พนักงานไปส่งคนขับไปรับรถ: ' + supportDriver);
+      }
+      return notes.length ? baseReason + ' | ' + notes.join(' | ') : baseReason;
+    }
+    rows.push(buildRow_({
+      resourceType: 'vehicle',
+      resourceId: payload.vehiclePlate || payload.resourceId || '',
+      assignedDriver: repairMode === 'service_center'
+        ? buildAssignedDriverText_(dropoffMethod === 'internal_driver' ? payload.dropoffDriver : '', pickupDeliveryType === 'internal_driver' ? payload.pickupDriver : '')
+        : (payload.assignedDriver || ''),
+      reason: buildRepairReason_(),
+      tripPhase: repairMode === 'service_center' ? 'repair' : ''
+    }));
 
-    // 2. Driver Block
-    if (payload.assignedDriver) {
-      var dRow = baseRow.slice();
-      dRow[0] = 'driver';
-      dRow[1] = payload.assignedDriver;
-      rows.push(dRow);
+    if (repairMode === 'service_center') {
+      var dropoffDriver = String(payload.dropoffDriver || '').trim();
+      var pickupDriver = String(payload.pickupDriver || '').trim();
+      var dropoffTime = parseTimeSafe_(payload.dropoffTime || payload.startTime);
+      var pickupTime = parseTimeSafe_(payload.pickupTime || payload.endTime);
+      var externalPickupBy = String(payload.externalPickupBy || '').replace(/\s+/g, ' ').trim();
+      var pickupDeliveredBy = String(payload.pickupDeliveredBy || '').replace(/\s+/g, ' ').trim();
+      var hasDriverDropoffSupport = pickupDeliveryType === 'internal_driver' && (payload.hasDriverDropoffSupport === true || String(payload.hasDriverDropoffSupport || '').toLowerCase() === 'true');
+      var supportDriver = normalizeDriverName_(payload.supportDriver);
+      var supportDriverTime = parseTimeSafe_(payload.supportDriverTime || payload.pickupTime || payload.endTime);
+      if (!dropoffTime || !pickupTime ||
+          (dropoffMethod === 'internal_driver' && !dropoffDriver) ||
+          (dropoffMethod === 'repair_center_pickup' && !externalPickupBy) ||
+          (pickupDeliveryType === 'internal_driver' && !pickupDriver) ||
+          (pickupDeliveryType === 'repair_center_delivery' && !pickupDeliveredBy) ||
+          (hasDriverDropoffSupport && (!supportDriver || !supportDriverTime))) {
+        throw new Error('ข้อมูลฝากรถไว้ศูนย์ไม่ครบ');
+      }
+      if (dropoffMethod === 'internal_driver') {
+        rows.push(buildRow_({
+          resourceType: 'driver',
+          resourceId: dropoffDriver,
+          startDate: payload.startDate,
+          startTime: dropoffTime,
+          endDate: payload.startDate,
+          endTime: addMinutesToTime_(dropoffTime, 59),
+          assignedDriver: dropoffDriver,
+          reason: (payload.reason || 'ซ่อม') + ' (นำรถไปส่ง)',
+          tripPhase: 'dropoff'
+        }));
+      }
+      if (pickupDeliveryType === 'internal_driver') {
+        rows.push(buildRow_({
+          resourceType: 'driver',
+          resourceId: pickupDriver,
+          startDate: payload.endDate || payload.startDate,
+          startTime: pickupTime,
+          endDate: payload.endDate || payload.startDate,
+          endTime: addMinutesToTime_(pickupTime, 59),
+          assignedDriver: pickupDriver,
+          reason: (payload.reason || 'ซ่อม') + ' (รับรถกลับ)',
+          tripPhase: 'pickup'
+        }));
+        if (hasDriverDropoffSupport && supportDriver && normalizeDriverName_(supportDriver) !== normalizeDriverName_(pickupDriver)) {
+          rows.push(buildRow_({
+            resourceType: 'driver',
+            resourceId: supportDriver,
+            startDate: payload.endDate || payload.startDate,
+            startTime: supportDriverTime,
+            endDate: payload.endDate || payload.startDate,
+            endTime: addMinutesToTime_(supportDriverTime, 59),
+            assignedDriver: supportDriver,
+            reason: (payload.reason || 'ซ่อม') + ' (พนักงานไปส่งคนขับไปรับรถ)',
+            tripPhase: 'pickup_support'
+          }));
+        }
+      }
+    } else if (payload.assignedDriver) {
+      rows.push(buildRow_({
+        resourceType: 'driver',
+        resourceId: payload.assignedDriver,
+        assignedDriver: payload.assignedDriver
+      }));
     }
 
     _sheetApiUpdateValues_(sh, sh.getLastRow() + 1, 1, rows, { label: 'saveMaintenanceAvailability append rows' });
+    try { clearInitialCache_(); } catch (eCache) {}
     return {ok:true};
   } catch(e) { return {ok:false, error:e.message}; }
   finally { lock.releaseLock(); }
+}
+
+function normalizeDriverTripPhaseEnd_(rowType, tripPhase, startAt, endAt) {
+  var type = String(rowType || '').trim().toLowerCase();
+  var phase = String(tripPhase || '').trim().toLowerCase();
+  if (type !== 'driver') return endAt;
+  if (phase !== 'dropoff' && phase !== 'pickup' && phase !== 'pickup_support') return endAt;
+  if (!startAt || !endAt || isNaN(startAt.getTime()) || isNaN(endAt.getTime())) return endAt;
+  return new Date(startAt.getTime() + 59 * 60 * 1000);
 }
 
 function _checkAvailabilityOverlap(resType, resId, reqStart, reqEnd) {
@@ -8257,6 +9653,7 @@ function _checkAvailabilityOverlap(resType, resId, reqStart, reqEnd) {
 
   var headers = data[0] || [];
   var stIdx = headers.indexOf('status');
+  var phaseIdx = headers.indexOf('tripPhase');
 
   var normType = String(resType || '').trim().toLowerCase();
   var normId = (normType === 'driver')
@@ -8282,6 +9679,7 @@ function _checkAvailabilityOverlap(resType, resId, reqStart, reqEnd) {
 
     var bStart = getRadarDateTime_(row[2], row[3]);
     var bEnd = getRadarDateTime_(row[4], row[5]);
+    bEnd = normalizeDriverTripPhaseEnd_(rowType, phaseIdx > -1 ? row[phaseIdx] : '', bStart, bEnd);
 
     if (!bStart || !bEnd || isNaN(bStart.getTime()) || isNaN(bEnd.getTime())) {
       Logger.log('[Radar] _checkAvailabilityOverlap skip invalid row: row=' + (i + 1));
@@ -8442,7 +9840,17 @@ function getCentralStatusMeta_(statusKey) {
 
 function resolveResourceStatus_(reason, isBusy) {
   var resolved = getCentralStatusMeta_('ready');
-  var reasonKey = REASON_TO_STATUS_KEY_[String(reason || '').trim()] || '';
+  var reasonText = String(reason || '').trim();
+  var reasonLc = reasonText.toLowerCase();
+  var reasonKey = REASON_TO_STATUS_KEY_[reasonText] || '';
+
+  if (!reasonKey) {
+    if (reasonText.indexOf('ซ่อม') > -1 || reasonLc.indexOf('repair') > -1 || reasonLc.indexOf('maintenance') > -1) {
+      reasonKey = 'repair';
+    } else if (reasonText.indexOf('ลา') > -1 || reasonText.indexOf('พัก') > -1) {
+      reasonKey = 'leave';
+    }
+  }
 
   if (reasonKey) {
     var reasonMeta = getCentralStatusMeta_(reasonKey);
@@ -8478,6 +9886,7 @@ function getAvailabilityMap_(targetTimeMs) {
   var headers = values[0] || [];
   var colStatus = headers.indexOf('status');
   var colClosedAt = headers.indexOf('closedAt');
+  var colTripPhase = headers.indexOf('tripPhase');
 
   function isClosed_(row) {
     var closedAt = colClosedAt > -1 ? row[colClosedAt] : '';
@@ -8505,6 +9914,7 @@ function getAvailabilityMap_(targetTimeMs) {
 
   for (var i = 1; i < values.length; i++) {
     var row = values[i] || [];
+    var resType = String(row[0] || '').trim().toLowerCase();
     var resourceId = String(row[1] || '').trim();
     var reason = String(row[6] || '').trim();
 
@@ -8518,15 +9928,17 @@ function getAvailabilityMap_(targetTimeMs) {
     if (!startAt || !endAt) continue;
     if (atMs < startAt.getTime() || atMs > endAt.getTime()) continue;
 
-    var statusKey = REASON_TO_STATUS_KEY_[reason] || 'ready';
-    var prev = map[resourceId];
+    var statusKey = resolveResourceStatus_(reason, false).key;
+    var mapKey = resType === 'driver' ? normalizeRadarName_(resourceId) : normalizeRadarPlate_(resourceId);
+    var prev = map[mapKey];
     var nextPriority = getCentralStatusMeta_(statusKey).priority;
     var prevPriority = prev ? getCentralStatusMeta_(prev.statusKey).priority : 0;
 
     if (!prev || nextPriority >= prevPriority) {
-      map[resourceId] = {
+      map[mapKey] = {
         reason: reason,
-        statusKey: statusKey
+        statusKey: statusKey,
+        tripPhase: colTripPhase > -1 ? String(row[colTripPhase] || '').trim().toLowerCase() : ''
       };
     }
   }
@@ -8575,6 +9987,17 @@ function _radarNormalizeDateOnly_(dateVal) {
 function _radarNormalizeTimeOnly_(timeVal) {
   if (timeVal === null || timeVal === undefined || timeVal === '') {
     return { h: 0, m: 0 };
+  }
+
+  // FIX: Google Sheets serial time (SERIAL_NUMBER render) arrives as decimal in [0,1).
+  // e.g. 0.3333 = 08:00, 0.5416 = 13:00. Must handle BEFORE String conversion.
+  // Without this, "0.3333..." matches regex as h=0,m=33 (00:33) instead of 08:00.
+  if (typeof timeVal === 'number' && timeVal >= 0 && timeVal < 1) {
+    var totalMins = Math.round(timeVal * 24 * 60);
+    return {
+      h: Math.floor(totalMins / 60) % 24,
+      m: totalMins % 60
+    };
   }
 
   if (Object.prototype.toString.call(timeVal) === '[object Date]' && !isNaN(timeVal.getTime())) {
@@ -8731,6 +10154,12 @@ function buildRadarContext_() {
           }
         }
 
+        // 🍓 FIX: skip expired availability block — ถ้า now > blockEnd ให้ข้ามทันที
+        if (ctx.now.getTime() > blockEnd.getTime()) {
+          Logger.log('[Radar] skip expired block: id=' + String(b.bookingId || '') + ' endAt=' + fmt_(blockEnd));
+          return;
+        }
+
         var blockItem = {
           bookingId: String(b.bookingId || ''),
           resourceType: status === 'driver_block' ? 'driver' : 'vehicle',
@@ -8741,7 +10170,8 @@ function buildRadarContext_() {
           endAt: blockEnd,
           reason: String(b.reason || b.note || b.project || '').trim(),
           status: status,
-          isClosed: b.isClosed === true
+          isClosed: b.isClosed === true,
+          tripPhase: String(b.tripPhase || '').trim().toLowerCase()
         };
 
         ctx.availBlocks.push(blockItem);
@@ -8911,19 +10341,19 @@ function isBookingToday(start, end, now) {
 function calculateVehicleStatus(plate, ctx) {
   var normPlate = normalizeRadarPlate_(plate);
   var availMap = (ctx && ctx.availMap) ? ctx.availMap : {};
-  var avail = availMap[String(plate || '').trim()] || null;
+  var avail = availMap[normPlate] || null;
 
 // ANCHOR: isTargetActiveRightNow precise logic
 function isTargetActiveRightNow(startAt, endAt) {
   if (!startAt || !endAt) return false;
   
   // 🍓 BERRY FIX: บังคับใช้ Timestamp (ms) เปรียบเทียบ เพื่อตัดปัญหา Timezone Shift ใน GAS
-  var nowMs = new Date().getTime();
+  var nowMs = (ctx && ctx.now) ? ctx.now.getTime() : new Date().getTime();
   var startMs = startAt.getTime();
   var endMs = endAt.getTime();
   
-  // Logic: ตอนนี้ >= เริ่มต้น AND ตอนนี้ <= สิ้นสุด
-  var isActive = (nowMs >= startMs && nowMs <= endMs);
+  // Logic: ตอนนี้ >= เริ่มต้น AND ตอนนี้ < สิ้นสุด
+  var isActive = (nowMs >= startMs && nowMs < endMs);
   
   return isActive;
 }
@@ -8950,19 +10380,19 @@ function isTargetActiveRightNow(startAt, endAt) {
 function calculateDriverStatus(driverName, ctx) {
   var name = normalizeRadarName_(driverName);
   var availMap = (ctx && ctx.availMap) ? ctx.availMap : {};
-  var avail = availMap[String(driverName || '').trim()] || null;
+  var avail = availMap[name] || null;
 
 // ANCHOR: isTargetActiveRightNow precise logic
 function isTargetActiveRightNow(startAt, endAt) {
   if (!startAt || !endAt) return false;
   
   // 🍓 BERRY FIX: บังคับใช้ Timestamp (ms) เปรียบเทียบ เพื่อตัดปัญหา Timezone Shift ใน GAS
-  var nowMs = new Date().getTime();
+  var nowMs = (ctx && ctx.now) ? ctx.now.getTime() : new Date().getTime();
   var startMs = startAt.getTime();
   var endMs = endAt.getTime();
   
-  // Logic: ตอนนี้ >= เริ่มต้น AND ตอนนี้ <= สิ้นสุด
-  var isActive = (nowMs >= startMs && nowMs <= endMs);
+  // Logic: ตอนนี้ >= เริ่มต้น AND ตอนนี้ < สิ้นสุด
+  var isActive = (nowMs >= startMs && nowMs < endMs);
   
   return isActive;
 }
@@ -9239,7 +10669,7 @@ function closeBookingActualEnd(payload) {
       ], { label: 'closeBookingActualEnd append row' });
     }
 
-    try { cacheDelete_('mainDataCache_v13_BerryFix'); } catch (e) {}
+    try { clearInitialCache_(); } catch (e) {}
 
     var notifyResult = null;
     try {

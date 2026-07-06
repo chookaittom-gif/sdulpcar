@@ -9388,6 +9388,21 @@ function getBookingFilePayload() {
 }
 
 
+async function searchBookingsByPhoneWithFallback(phone) {
+    if (window.GVizService && window.APP_CONFIG && window.APP_CONFIG.gvizUrl && window.APP_CONFIG.headerIndexes) {
+        try {
+            console.log("⚡ GViz search initiated...");
+            const data = await window.GVizService.searchBookingsByPhone(phone);
+            console.log("⚡ GViz search completed successfully. Found " + data.length + " items.");
+            return { ok: true, data: data };
+        } catch (gvizErr) {
+            console.warn("⚠️ GViz search failed. Falling back to GAS...", gvizErr);
+        }
+    }
+    const runner = (typeof window.googleScriptRun !== 'undefined') ? window.googleScriptRun : window.gas;
+    return await runner('apiGetBookingsByPhone', phone);
+}
+
 /* [ANCHOR: Booking Search Logic for Cancellation] */
 async function handleSearchBookingId() {
     const phoneInput = document.getElementById('cancel-phone');
@@ -9407,7 +9422,7 @@ async function handleSearchBookingId() {
     searchBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span> ค้นหา...';
     
     try {
-        const res = await googleScriptRun('apiGetBookingsByPhone', phoneInput.value);
+        const res = await searchBookingsByPhoneWithFallback(phoneInput.value);
         
         if (!res.ok) {
             throw new Error(res.error || 'ไม่สามารถค้นหาข้อมูลได้');
@@ -9500,10 +9515,7 @@ window.handleSearchBookingId = async function() {
     }
     
     try {
-        // เรียก Server: apiGetBookingsByPhone
-        // (ตรวจสอบว่ามี googleScriptRun หรือยัง ถ้าไม่มีใช้ตัว Limited)
-        const runner = (typeof window.googleScriptRun !== 'undefined') ? window.googleScriptRun : window.gas;
-        const res = await runner('apiGetBookingsByPhone', phoneInput.value);
+        const res = await searchBookingsByPhoneWithFallback(phoneInput.value);
         
         if (!res || !res.ok) {
             throw new Error(res ? res.error : 'ไม่สามารถเชื่อมต่อ Server ได้');

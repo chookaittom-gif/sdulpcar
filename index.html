@@ -4,13 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>ระบบจองยานพาหนะ - มหาวิทยาลัยสวนดุสิต ศูนย์การศึกษาลำปาง</title>
+    <link rel="icon" href="data:,">
 
     <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
     <script type="text/javascript">
       google.charts.load('current', {'packages':['corechart']});
     </script>
 
-    <?!= include_('Style'); ?>
+    <link rel="stylesheet" href="./style.css">
 </head>
 <body>
     <header class="header">
@@ -318,19 +319,18 @@
             <option value="ทัศนศึกษา">ทัศนศึกษา</option><option value="นิเทศนักศึกษา">นิเทศนักศึกษา</option>
             <option value="แนะแนว">แนะแนว</option><option value="ซื้อของ">ซื้อของ</option>
             <option value="ควบคุมงานก่อสร้าง">ควบคุมงานก่อสร้าง</option><option value="ส่งเอกสาร/พัสดุ">ส่งเอกสาร/พัสดุ</option>
-            <option value="other">อื่นๆ (ระบุ)</option>
+            <option value="other">อื่นๆ โปรดระบุ</option>
         </select>
         <label for="fuel-workType-select">ประเภทงาน *</label>
     </div>
     
-    <!-- 🍓 BERRY FIX: เพิ่มช่องรองรับประเภทงานอื่นๆ ตรงนี้ -->
     <div class="form-group hidden" id="fuel-workType-other-wrap">
-        <input type="text" id="fuel-workType-other" placeholder=" " name="workTypeOther">
-        <label for="fuel-workType-other">ระบุประเภทงาน *</label>
+        <input type="text" id="fuel-workType-other" placeholder="ระบุประเภทงาน" name="workTypeOther">
+        <label for="fuel-workType-other">อื่นๆ โปรดระบุ *</label>
     </div>
     
     <div class="form-group">
-        <input type="text" name="project" id="fuel-project" placeholder="พิมพ์สั้นๆ ชัดเจน" required>
+        <input type="text" name="project" id="fuel-project" placeholder="ระบุงาน/โครงการ" required>
         <label for="fuel-project">งาน/โครงการ *</label>
     </div>
 
@@ -352,7 +352,7 @@
         <input type="text" id="fuel-budget-other" placeholder=" " name="budgetTypeOther">
         <label for="fuel-budget-other">ระบุงบประมาณ *</label>
     </div>
-    <div class="form-group desktop-only-empty" id="budget-spacer"></div>
+    <div class="form-group desktop-only-empty hidden" id="budget-spacer"></div>
 
 
 
@@ -811,11 +811,16 @@
     <option value="ซื้อของ">ซื้อของ</option>
     <option value="ควบคุมงานก่อสร้าง">ควบคุมงานก่อสร้าง</option>
     <option value="ส่งเอกสาร/พัสดุ">ส่งเอกสาร/พัสดุ</option>
-    <option value="อื่นๆ">อื่นๆ</option>
+    <option value="อื่นๆ">อื่นๆ โปรดระบุ</option>
   </select>
 </div>
 
-<div class="form-group">
+<div class="form-group hidden" id="form-purpose-other-wrap">
+  <label for="form-purpose-other">อื่นๆ โปรดระบุ *</label>
+  <input type="text" id="form-purpose-other" name="workTypeOther" placeholder="ระบุประเภทงาน">
+</div>
+
+<div class="form-group full-width">
   <label for="booking-project-name">งาน/โครงการ *</label>
   <input type="text" id="booking-project-name" name="workName" required placeholder="พิมพ์สั้นๆ ชัดเจน (เช่น เชิงปฏิบัติการ AI)">
 </div>
@@ -945,9 +950,12 @@
                 <input type="text" id="admin-username" name="username" required placeholder=" " autocomplete="username">
                 <label for="admin-username">ชื่อผู้ใช้ (Username)</label>
               </div>
-              <div class="form-group" style="margin-top: 1rem;">
-                <input type="password" id="admin-password" name="password" required placeholder=" " autocomplete="current-password">
+              <div class="form-group password-input-wrapper">
+                <input type="password" id="admin-password" name="password" required placeholder=" " autocomplete="current-password" class="password-input">
                 <label for="admin-password">รหัสผ่าน (Password)</label>
+                <button type="button" id="toggle-password-btn" onclick="togglePasswordVisibility()" class="password-toggle-btn" title="แสดง/ซ่อนรหัสผ่าน" aria-label="แสดงรหัสผ่าน">
+                  👁️
+                </button>
               </div>
               <p class="login-error text-danger text-center mt-2" style="display:none; font-size:0.9rem;"></p>
             </div>
@@ -1100,6 +1108,9 @@
 <button type="button" id="self-test-admin-btn" class="btn cyber-btn-gold" onclick="runSelfTest(event)" style="display:none;">
     <span class="icon">🧪</span> <span class="btn-text">Self Test</span>
 </button>
+            <button type="button" id="force-refresh-admin-btn" class="btn cyber-btn-light" onclick="forceRefreshInitialData(event)" style="display:none;">
+              <span class="icon">⟳</span> <span class="btn-text">Force Refresh</span>
+            </button>
           <button type="button" class="btn cyber-btn-light" onclick="closeModalA11y('admin-panel-modal')">
               ปิดหน้าต่าง
             </button>
@@ -1110,7 +1121,7 @@
     </div>
 
     <div id="suspend-modal" class="modal" role="dialog" aria-hidden="true" style="z-index: 12000 !important;">
-      <div class="modal-content" style="max-width: 400px; border-radius: 16px;">
+      <div class="modal-content repair-modal-wide" style="max-width: 400px; border-radius: 16px;">
         <div class="modal-header" style="background: linear-gradient(135deg, #F59E0B, #B45309); padding: 1.2rem 1.5rem;">
           <h2 id="suspend-title" style="color: white; font-size: 1.15rem; margin: 0; display: flex; align-items: center; gap: 8px;">⏸ ระงับการใช้งาน</h2>
           <button type="button" onclick="closeModalA11y('suspend-modal')" class="modal-close" style="color: white; background: rgba(255,255,255,0.2);">✕</button>
@@ -1120,12 +1131,26 @@
             <input type="hidden" id="suspend-type">
             <input type="hidden" id="suspend-id">
             
+            <div class="form-group" id="suspend-repair-mode-wrapper" style="margin-bottom: 12px; display:none;">
+              <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">ลักษณะการซ่อม *</label>
+              <div class="repair-mode-segment" role="radiogroup" aria-label="ลักษณะการซ่อม">
+                <label class="repair-mode-card">
+                  <input type="radio" name="suspend-repair-mode" value="one_day" checked>
+                  <span>ไป-กลับวันเดียว / รับกลับเลย</span>
+                </label>
+                <label class="repair-mode-card">
+                  <input type="radio" name="suspend-repair-mode" value="service_center">
+                  <span>ฝากรถไว้ศูนย์</span>
+                </label>
+              </div>
+            </div>
+
           <!-- ANCHOR: HTML quick time buttons suspend -->
             <div class="form-group">
               <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">เริ่มตั้งแต่ (วันที่ - เวลา) *</label>
               <div style="display: flex; gap: 8px;">
                 <input type="date" id="suspend-start" class="form-control" required style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 60%;">
-                <input type="time" id="suspend-start-time" class="form-control" style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 40%;">
+                <input type="time" id="suspend-start-time" class="form-control" required style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 40%;">
               </div>
             </div>
             
@@ -1133,20 +1158,16 @@
               <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">ถึง (วันที่ - เวลา) *</label>
               <div style="display: flex; gap: 8px;">
                 <input type="date" id="suspend-end" class="form-control" required style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 60%;">
-                <input type="time" id="suspend-end-time" class="form-control" style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 40%;">
+                <input type="time" id="suspend-end-time" class="form-control" required style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 40%;">
               </div>
             </div>
 
             <!-- ปุ่มเลือกเวลาด่วน -->
             <div class="form-group" id="suspend-quick-time-wrapper" style="margin-top: 12px;">
               <div class="quick-time-grid">
-                <button type="button" class="btn-quick-time active" data-type="allday">ทั้งวัน</button>
                 <button type="button" class="btn-quick-time" data-type="morning">ครึ่งเช้า</button>
                 <button type="button" class="btn-quick-time" data-type="afternoon">ครึ่งบ่าย</button>
               </div>
-              <small style="color:#8b5cf6; margin-top: 6px; display:block; font-size: 0.8rem;">
-                * ถ้าไม่ระบุเวลา ระบบจะนับเป็นทั้งวัน (00:00 - 23:59 น.)
-              </small>
             </div>
 
             <div class="form-group" style="margin-top: 12px;" id="suspend-driver-wrapper">
@@ -1159,6 +1180,95 @@
                 <option value="ปริญญา ก้อนสัมฤทธิ์">ปริญญา ก้อนสัมฤทธิ์</option>
                 <option value="อภิรัฐวุฒิ คณารักษ์">อภิรัฐวุฒิ คณารักษ์</option>
               </select>
+            </div>
+
+            <div id="suspend-service-center-fields" class="service-center-fields" style="display:none;">
+              <div class="service-center-title">ข้อมูลการนำรถไปฝาก</div>
+              <div class="form-group service-center-dropoff-method">
+                <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">วิธีนำรถไปส่งศูนย์ *</label>
+                <div class="repair-mode-segment service-center-dropoff-segment" role="radiogroup" aria-label="วิธีนำรถไปส่งศูนย์">
+                  <label class="repair-mode-card">
+                    <input type="radio" name="suspend-dropoff-method" value="internal_driver" checked>
+                    <span>พนักงานขับรถของหน่วยงาน</span>
+                  </label>
+                  <label class="repair-mode-card">
+                    <input type="radio" name="suspend-dropoff-method" value="repair_center_pickup">
+                    <span>ศูนย์/ร้านซ่อมมารับรถ</span>
+                  </label>
+                </div>
+              </div>
+              <div class="form-group" id="suspend-trip-driver-wrapper">
+                <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">คนขับนำรถไปส่ง *</label>
+                <select id="suspend-trip-driver" class="form-control" style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 100%;">
+                  <option value="">-- เลือกคนขับ --</option>
+                  <option value="ชัชวาลย์ วงศ์มั่น">ชัชวาลย์ วงศ์มั่น</option>
+                  <option value="ประเสริฐ หน่อแก้ว">ประเสริฐ หน่อแก้ว</option>
+                  <option value="ปรีชา ถวิลเวช">ปรีชา ถวิลเวช</option>
+                  <option value="ปริญญา ก้อนสัมฤทธิ์">ปริญญา ก้อนสัมฤทธิ์</option>
+                  <option value="อภิรัฐวุฒิ คณารักษ์">อภิรัฐวุฒิ คณารักษ์</option>
+                </select>
+              </div>
+              <div class="form-group" id="suspend-external-pickup-by-wrapper" style="display:none;">
+                <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">ชื่อผู้มารับรถ *</label>
+                <input type="text" id="suspend-external-pickup-by" class="form-control" placeholder="เช่น นายสมชาย Toyota" style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 100%;">
+              </div>
+              <div class="form-group">
+                <label id="suspend-dropoff-time-label" style="font-size: 0.95rem; color: #475569; font-weight: 700;">เวลาไปส่ง *</label>
+                <input type="time" id="suspend-dropoff-time" class="form-control" required style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 100%;">
+              </div>
+              <div class="form-group service-center-return-method">
+                <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">วิธีรับรถกลับ *</label>
+                <div class="repair-mode-segment service-center-return-segment" role="radiogroup" aria-label="วิธีรับรถกลับ">
+                  <label class="repair-mode-card">
+                    <input type="radio" name="suspend-pickup-delivery-type" value="internal_driver" checked>
+                    <span>พนักงานขับรถของหน่วยงานไปรับ</span>
+                  </label>
+                  <label class="repair-mode-card">
+                    <input type="radio" name="suspend-pickup-delivery-type" value="repair_center_delivery">
+                    <span>ศูนย์/ร้านซ่อมนำรถมาส่ง</span>
+                  </label>
+                </div>
+              </div>
+              <div class="form-group" id="suspend-pickup-driver-wrapper">
+                <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">คนขับไปรับรถกลับ *</label>
+                <select id="suspend-pickup-driver" class="form-control" style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 100%;">
+                  <option value="">-- เลือกคนขับ --</option>
+                  <option value="ชัชวาลย์ วงศ์มั่น">ชัชวาลย์ วงศ์มั่น</option>
+                  <option value="ประเสริฐ หน่อแก้ว">ประเสริฐ หน่อแก้ว</option>
+                  <option value="ปรีชา ถวิลเวช">ปรีชา ถวิลเวช</option>
+                  <option value="ปริญญา ก้อนสัมฤทธิ์">ปริญญา ก้อนสัมฤทธิ์</option>
+                  <option value="อภิรัฐวุฒิ คณารักษ์">อภิรัฐวุฒิ คณารักษ์</option>
+                </select>
+              </div>
+              <div class="form-group" id="suspend-support-driver-toggle-wrapper">
+                <label class="repair-mode-card" style="justify-content:flex-start; gap:8px; min-height:44px;">
+                  <input type="checkbox" id="suspend-has-support-driver" style="position:static; opacity:1; pointer-events:auto; width:18px; height:18px;">
+                  <span>มีพนักงานขับรถไปส่ง</span>
+                </label>
+              </div>
+              <div class="form-group" id="suspend-support-driver-wrapper" style="display:none;">
+                <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">คนขับที่ไปส่งพนักงาน *</label>
+                <select id="suspend-support-driver" class="form-control" style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 100%;">
+                  <option value="">-- เลือกคนขับ --</option>
+                  <option value="ชัชวาลย์ วงศ์มั่น">ชัชวาลย์ วงศ์มั่น</option>
+                  <option value="ประเสริฐ หน่อแก้ว">ประเสริฐ หน่อแก้ว</option>
+                  <option value="ปรีชา ถวิลเวช">ปรีชา ถวิลเวช</option>
+                  <option value="ปริญญา ก้อนสัมฤทธิ์">ปริญญา ก้อนสัมฤทธิ์</option>
+                  <option value="อภิรัฐวุฒิ คณารักษ์">อภิรัฐวุฒิ คณารักษ์</option>
+                </select>
+              </div>
+              <div class="form-group" id="suspend-support-driver-time-wrapper" style="display:none;">
+                <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">เวลาไปส่งพนักงาน *</label>
+                <input type="time" id="suspend-support-driver-time" class="form-control" required style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 100%;">
+              </div>
+              <div class="form-group" id="suspend-pickup-delivered-by-wrapper" style="display:none;">
+                <label style="font-size: 0.95rem; color: #475569; font-weight: 700;">ชื่อผู้ส่งรถกลับ *</label>
+                <input type="text" id="suspend-pickup-delivered-by" class="form-control" placeholder="เช่น นายสมชาย Toyota" style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 100%;">
+              </div>
+              <div class="form-group">
+                <label id="suspend-pickup-time-label" style="font-size: 0.95rem; color: #475569; font-weight: 700;">เวลาไปรับกลับ *</label>
+                <input type="time" id="suspend-pickup-time" class="form-control" required style="height: 44px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 0 12px; width: 100%;">
+              </div>
             </div>
 
             <div class="form-group" style="margin-top: 12px;">
@@ -1177,16 +1287,28 @@
 
 
 
-    <div id="loading" class="loading hidden">
-      <div class="spinner"></div>
-      <p>กำลังโหลด.</p>
+    <!-- ANCHOR: loading-step-progress -->
+    <div id="loading" class="loading hidden" role="status" aria-live="polite" aria-atomic="true">
+      <div class="loading-panel">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <p id="loading-step-text">กำลังเตรียมระบบ...</p>
+        <ol id="loading-step-list" class="loading-step-list">
+          <li data-step="preparing" class="active">กำลังเตรียมระบบ</li>
+          <li data-step="vehicles">โหลดข้อมูลยานพาหนะ</li>
+          <li data-step="drivers">โหลดข้อมูลพนักงานขับรถ</li>
+          <li data-step="bookings">โหลดข้อมูลรายการจองรถ</li>
+          <li data-step="calendar">จัดเตรียมตารางปฏิทิน</li>
+          <li data-step="dashboard">สรุปสถิติและแดชบอร์ด</li>
+          <li data-step="ready">ระบบพร้อมใช้งาน</li>
+        </ol>
+      </div>
     </div>
 
     <div id="toast" class="toast"></div>
 
    <footer class="footer">
       <div class="container">
-        <p>ระบบจองยานพาหนะ © 2026 มหาวิทยาลัยสวนดุสิต ศูนย์การศึกษาลำปาง.</p>
+        <p>ระบบจองยานพาหนะ v3.2 | © 2026 มหาวิทยาลัยสวนดุสิต ศูนย์การศึกษา ลำปาง</p>
         <p style="margin-top: 5px; font-size: 0.9em; opacity: 0.8;">พัฒนาโดย: นายชูเกียรติ กุศลสถิตย์</p>
       </div>
     </footer>
@@ -1252,6 +1374,8 @@
     </div>
   </div>
 </div>
-        <?!= include_('JavaScript'); ?>
+        <script src="./config.js"></script>
+        <script src="./gviz-service.js"></script>
+        <script src="./app.js"></script>
 </body>
 </html>

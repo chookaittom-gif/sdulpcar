@@ -1,0 +1,12 @@
+# Local and Editor configuration
+.codegraph/
+.codex/
+9arm-skills/
+
+# Secret and Local APIs
+apikey/
+agent/
+
+# Temp files
+tto
+repomix-output.xml
