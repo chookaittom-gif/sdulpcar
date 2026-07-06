@@ -8,10 +8,7 @@
 9arm-skills/**
 
 # Ignore local source files
-app.js
-gviz-service.js
-style.css
-config.js
+src/**
 
 # Ignore project package files
 package.json
