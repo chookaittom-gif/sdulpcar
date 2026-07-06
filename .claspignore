@@ -1,0 +1,31 @@
+# Ignore git and system folders recursively
+.git/**
+.gitignore
+.agents/**
+.cursor/**
+.codegraph/**
+.codex/**
+9arm-skills/**
+
+# Ignore local source files
+app.js
+gviz-service.js
+style.css
+config.js
+
+# Ignore project package files
+package.json
+package-lock.json
+repomix-output.xml
+tto
+apikey/**
+agent/**
+
+# Ignore design docs
+PRODUCT.md
+DESIGN.md
+README.md
+
+# Ignore clasp config files
+.clasp.json
+.claspignore

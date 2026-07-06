@@ -2,6 +2,7 @@
 .codegraph/
 .codex/
 9arm-skills/
+.agents/
 
 # Secret and Local APIs
 apikey/
