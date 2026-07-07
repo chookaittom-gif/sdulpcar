@@ -7632,6 +7632,84 @@ function changeTimelineDate(deltaDays) {
 }
 
 
+function getInitialDataTimeoutMs() {
+  const cfgMs = Number((window.APP_CONFIG && window.APP_CONFIG.requestTimeoutMs) || 60000);
+  return Number.isFinite(cfgMs) && cfgMs > 0 ? cfgMs : 60000;
+}
+
+function createInitialDataFallback() {
+  return {
+    ok: true,
+    data: {
+      bookings: [],
+      vehicles: { vans: [], trucks: [], all: [] },
+      drivers: [],
+      projects: [],
+      user: { isLoggedIn: false, role: 'Guest' }
+    },
+    fallback: true
+  };
+}
+
+function withInitialDataTimeout(promise, timeoutMs, attempt) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const err = new Error('INITIAL_DATA_TIMEOUT');
+      err.code = 'INITIAL_DATA_TIMEOUT';
+      err.timeoutMs = timeoutMs;
+      err.attempt = attempt;
+      reject(err);
+    }, timeoutMs);
+
+    Promise.resolve(promise).then(
+      value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      err => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+async function loadStartupInitialData(runner) {
+  const timeoutMs = getInitialDataTimeoutMs();
+  console.log('START initial data');
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      console.log('WAIT getWebAppInitialData');
+      const initData = await withInitialDataTimeout(
+        runner('getWebAppInitialData', { startupAttempt: attempt }),
+        timeoutMs,
+        attempt
+      );
+      if (!initData || !initData.ok) throw new Error(initData ? initData.error : 'Init data missing');
+      console.log('SUCCESS getWebAppInitialData');
+      return initData;
+    } catch (error) {
+      console.error('FAIL getWebAppInitialData', error);
+      if (attempt >= 2) {
+        try {
+          if (typeof showToast === 'function') showToast('โหลดข้อมูลเริ่มต้นไม่สำเร็จ ระบบจะเปิดด้วยข้อมูลว่าง', 'error');
+        } catch (_) {}
+        return createInitialDataFallback();
+      }
+    }
+  }
+
+  return createInitialDataFallback();
+}
+
 function initializeApp(options) {
   const silentIfRunning = !!(options && options.silentIfRunning);
   if (window.__vbInitState === 'done') return Promise.resolve(true);
@@ -7651,8 +7729,7 @@ function initializeApp(options) {
 
       try { if (typeof checkSessionTimeout_ === 'function') checkSessionTimeout_(); } catch (e) {}
 
-      const initData = await gas('getWebAppInitialData');
-      if (!initData || !initData.ok) throw new Error(initData ? initData.error : 'Init data missing');
+      const initData = await loadStartupInitialData(gas);
 
       window.allBookingsData = (initData.data && initData.data.bookings) || [];
       window.vehiclesList    = (initData.data && initData.data.vehicles) || { vans: [], trucks: [], all: [] };
@@ -7705,6 +7782,7 @@ function initializeApp(options) {
       return false;
 
     } finally {
+      console.log('FINALLY hide loading');
       try { if (typeof hideLoading === 'function') hideLoading(); } catch (e) {}
       if (window.__vbInitState !== 'done') window.__vbInitPromise = null;
     }
