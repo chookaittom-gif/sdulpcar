@@ -4,7 +4,7 @@
   "description": "ระบบจองยานพาหนะ มหาวิทยาลัยสวนดุสิต ศูนย์การศึกษาลำปาง",
   "main": "code.gs",
   "scripts": {
-    "build": "powershell -ExecutionPolicy Bypass -Command \"Set-Content -Path JavaScript.html -Value '<script>'; Get-Content -Path app.js | Add-Content -Path JavaScript.html; Add-Content -Path JavaScript.html -Value '</script>'; Set-Content -Path gviz-service.html -Value '<script>'; Get-Content -Path gviz-service.js | Add-Content -Path gviz-service.html; Add-Content -Path gviz-service.html -Value '</script>'; Set-Content -Path Style.html -Value '<style>'; Get-Content -Path style.css | Add-Content -Path Style.html; Add-Content -Path Style.html -Value '</style>'\"",
+    "build": "powershell -ExecutionPolicy Bypass -Command \"Set-Content -Path gas-deploy\\JavaScript.html -Value '<script>'; Get-Content -Path src\\app.js | Add-Content -Path gas-deploy\\JavaScript.html; Add-Content -Path gas-deploy\\JavaScript.html -Value '</script>'; Set-Content -Path gas-deploy\\gviz-service.html -Value '<script>'; Get-Content -Path src\\gviz-service.js | Add-Content -Path gas-deploy\\gviz-service.html; Add-Content -Path gas-deploy\\gviz-service.html -Value '</script>'; Set-Content -Path gas-deploy\\Style.html -Value '<style>'; Get-Content -Path src\\style.css | Add-Content -Path gas-deploy\\Style.html; Add-Content -Path gas-deploy\\Style.html -Value '</style>'\"",
     "push": "npm run build && clasp push"
   },
   "author": "ชูเกียรติ กุศลสถิตย์",

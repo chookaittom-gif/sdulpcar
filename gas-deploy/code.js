@@ -7024,6 +7024,8 @@ function getWebAppInitialData() {
   });
 }
 
+
+
 function ping() {
   return { ok:true, ts: new Date().toISOString() };
 }

@@ -6,6 +6,7 @@
   const requestQueue = [];
   let isProcessing = false;
   const SAFE_INTERVAL = 1500;
+  const REQUEST_TIMEOUT_MS = Number((G.APP_CONFIG && G.APP_CONFIG.requestTimeoutMs) || 60000);
   let lastRunTime = 0;
 
   G.googleScriptRunLimited = function(fnName, payload) {
@@ -43,12 +44,46 @@
 
  function executeRequest(req) {
   lastRunTime = Date.now();
+  if (req.settled) return;
+  if (req.timer) {
+    clearTimeout(req.timer);
+    req.timer = null;
+  }
+
+  const finishRequest = (type, value) => {
+    if (req.settled) return;
+    req.settled = true;
+    if (req.timer) {
+      clearTimeout(req.timer);
+      req.timer = null;
+    }
+    const idx = requestQueue.indexOf(req);
+    if (idx > -1) requestQueue.splice(idx, 1);
+    if (type === 'resolve') req.resolve(value);
+    else req.reject(value);
+    processNext();
+  };
+
+  req.timer = setTimeout(function() {
+    if (req.fnName === 'getWebAppInitialData' && Number(req.timeoutRetry || 0) < 1) {
+      req.timeoutRetry = Number(req.timeoutRetry || 0) + 1;
+      console.warn('⚠️ Timeout retry ' + req.fnName + ' (' + req.timeoutRetry + '/1) after ' + REQUEST_TIMEOUT_MS + 'ms');
+      req.timer = null;
+      setTimeout(function() { executeRequest(req); }, 1500);
+      return;
+    }
+
+    const err = new Error('REQUEST_TIMEOUT_OR_ABORTED');
+    err.code = 'REQUEST_TIMEOUT_OR_ABORTED';
+    err.fnName = req.fnName;
+    console.error('❌ Timeout ' + req.fnName + ' after ' + REQUEST_TIMEOUT_MS + 'ms');
+    finishRequest('reject', err);
+  }, REQUEST_TIMEOUT_MS);
+
   try {
     google.script.run
       .withSuccessHandler(function(res) {
-        requestQueue.shift();
-        req.resolve(res);
-        processNext();
+        finishRequest('resolve', res);
       })
       .withFailureHandler(function(err) {
         const msg = String(err && err.message ? err.message : err || '');
@@ -56,29 +91,27 @@
         // ปิดเคส channel หลุด / tab เปลี่ยน / browser ปิด callback กลางทาง
         if (msg.includes('message channel closed') || msg.includes('asynchronous response')) {
           console.warn('⚠️ Connection interrupted (Benign):', req.fnName);
-          requestQueue.shift();
-          req.resolve({ ok: false, cancelled: true, benign: true, fnName: req.fnName, message: msg });
-          processNext();
+          finishRequest('resolve', { ok: false, cancelled: true, benign: true, fnName: req.fnName, message: msg });
           return;
         }
 
         if ((msg.includes('429') || msg.includes('Too Many Requests')) && req.retry < 3) {
           req.retry++;
           console.warn('⚠️ 429 Detected! Retrying ' + req.fnName + ' (' + req.retry + '/3) in 3s...');
+          if (req.timer) {
+            clearTimeout(req.timer);
+            req.timer = null;
+          }
           setTimeout(function() { executeRequest(req); }, 3000);
           return;
         }
 
         console.error('❌ Failed ' + req.fnName + ':', err);
-        requestQueue.shift();
-        req.reject(err);
-        processNext();
+        finishRequest('reject', err);
       })[req.fnName](req.payload);
   } catch (e) {
     console.error('Local execution error:', e);
-    requestQueue.shift();
-    req.reject(e);
-    processNext();
+    finishRequest('reject', e);
   }
 }
 
@@ -913,7 +946,7 @@ async function syncClientBookingState_(force) {
         if (!force && last > 0 && (now - last) < 3000) return false;
         window.__VB_LAST_SYNC_AT__ = now;
 
-        const initData = await googleScriptRunLimited('getWebAppInitialData');
+        const initData = await googleScriptRunLimited('getWebAppInitialData', force ? { forceRefresh: true, skipCache: true } : {});
         if (!initData || !initData.ok || !initData.data) return false;
 
         window.allBookingsData = initData.data.bookings || [];
@@ -3790,9 +3823,12 @@ function renderCalendar(year, month) {
 
     // sync ข้อมูลล่าสุดก่อนวาดปฏิทิน (throttle ผ่าน syncClientBookingState_)
     const hasClientBookings = Array.isArray(window.allBookingsData) && window.allBookingsData.length > 0;
-    if (!hasClientBookings && !window.__VB_CAL_SYNC_BUSY__) {
+    const calendarSyncKey = renderKey + ':' + Math.floor(nowMs / 30000);
+    const shouldSyncCalendar = !hasClientBookings || window.__VB_CAL_LAST_SYNC_KEY__ !== calendarSyncKey;
+    if (shouldSyncCalendar && !window.__VB_CAL_SYNC_BUSY__) {
+        window.__VB_CAL_LAST_SYNC_KEY__ = calendarSyncKey;
         window.__VB_CAL_SYNC_BUSY__ = true;
-        syncClientBookingState_()
+        syncClientBookingState_(false)
             .then((refreshed) => {
                 if (refreshed) {
                     setTimeout(() => {
@@ -11228,7 +11264,7 @@ window.loadBookingsView = function() {
   // ถ้ามีข้อมูลใหม่ จะสั่ง re-render อีก 1 รอบเพื่อให้ตาราง/ปฏิทินตรงกัน
   if (!window.__VB_BOOKINGS_SYNC_BUSY__) {
     window.__VB_BOOKINGS_SYNC_BUSY__ = true;
-    syncClientBookingState_()
+    syncClientBookingState_(false)
       .then((refreshed) => {
         if (refreshed) {
           setTimeout(() => {
