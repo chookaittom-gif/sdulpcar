@@ -7651,6 +7651,29 @@ function createInitialDataFallback() {
   };
 }
 
+function getInitialDataRetryDelays() {
+  return [1500, 3000, 5000];
+}
+
+function waitInitialDataRetry(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function isHttp404InitialDataError(error) {
+  return !!(error && (error.statusCode === 404 || String(error.message || error).indexOf('HTTP 404') > -1));
+}
+
+function getInitialDataErrorLabel(error) {
+  if (isHttp404InitialDataError(error)) return 'HTTP 404';
+  return (error && (error.code || error.message)) ? (error.code || error.message) : 'unknown error';
+}
+
+function isRetryableInitialDataError(error) {
+  const label = getInitialDataErrorLabel(error);
+  return label === 'INITIAL_DATA_TIMEOUT' ||
+    label === 'REQUEST_TIMEOUT_OR_ABORTED';
+}
+
 function withInitialDataTimeout(promise, timeoutMs, attempt) {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -7683,9 +7706,11 @@ function withInitialDataTimeout(promise, timeoutMs, attempt) {
 
 async function loadStartupInitialData(runner) {
   const timeoutMs = getInitialDataTimeoutMs();
+  const retryDelays = getInitialDataRetryDelays();
+  const maxRetries = retryDelays.length;
   console.log('START initial data');
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     try {
       console.log('WAIT getWebAppInitialData');
       const initData = await withInitialDataTimeout(
@@ -7697,29 +7722,43 @@ async function loadStartupInitialData(runner) {
       console.log('SUCCESS getWebAppInitialData');
       return initData;
     } catch (error) {
-      console.error('FAIL getWebAppInitialData', error);
-      if (attempt >= 2) {
+      const canRetry = attempt <= maxRetries && isRetryableInitialDataError(error);
+      if (canRetry) {
+        window.__vbInitState = 'INIT_RETRYING';
+        const reason = getInitialDataErrorLabel(error);
+        console.warn('RETRY getWebAppInitialData ' + attempt + '/' + maxRetries + ' after ' + reason);
         try {
-          if (typeof showToast === 'function') showToast('โหลดข้อมูลเริ่มต้นไม่สำเร็จ ระบบจะเปิดด้วยข้อมูลว่าง', 'error');
+          if (typeof showToast === 'function') showToast('กำลังลองโหลดข้อมูลอีกครั้ง...', 'info');
         } catch (_) {}
-        return createInitialDataFallback();
+        await waitInitialDataRetry(retryDelays[attempt - 1]);
+        continue;
       }
+
+      console.error('FAIL getWebAppInitialData', error);
+      console.error('INIT_FAILED');
+      window.__vbInitState = 'INIT_FAILED';
+      try {
+        if (typeof showToast === 'function') showToast('โหลดข้อมูลเริ่มต้นไม่สำเร็จ ระบบจะเปิดด้วยข้อมูลว่าง', 'error');
+      } catch (_) {}
+      return createInitialDataFallback();
     }
   }
 
+  console.error('INIT_FAILED');
+  window.__vbInitState = 'INIT_FAILED';
   return createInitialDataFallback();
 }
 
 function initializeApp(options) {
   const silentIfRunning = !!(options && options.silentIfRunning);
-  if (window.__vbInitState === 'done') return Promise.resolve(true);
-  if (window.__vbInitState === 'running' && window.__vbInitPromise) {
+  if (window.__vbInitState === 'INIT_READY' || window.__vbInitState === 'done') return Promise.resolve(true);
+  if ((window.__vbInitState === 'INIT_LOADING' || window.__vbInitState === 'INIT_RETRYING' || window.__vbInitState === 'running') && window.__vbInitPromise) {
     if (!silentIfRunning) {
       console.info('ℹ️ initializeApp() already running. Returning existing promise.');
     }
     return window.__vbInitPromise;
   }
-  window.__vbInitState = 'running';
+  window.__vbInitState = 'INIT_LOADING';
 
   window.__vbInitPromise = (async () => {
     console.log('🚀 Initializing Vehicle Booking System (V-Berry Fix)...');
@@ -7769,22 +7808,29 @@ function initializeApp(options) {
       try { if (typeof installSelfTestFloatingButton === 'function') installSelfTestFloatingButton(); } catch (e) {}
       try { if (typeof wireVehicleCountAutoClampOnce_ === 'function') wireVehicleCountAutoClampOnce_(); } catch (e) {}
 
-      window.__vbInitState = 'done';
+      if (initData && initData.fallback) {
+        window.__vbInitState = 'INIT_FAILED';
+        return false;
+      }
+
+      window.__vbInitState = 'INIT_READY';
+      console.log('INIT_READY');
       console.log('✅ Application initialized successfully!');
       return true;
 
     } catch (error) {
+      window.__vbInitState = 'INIT_FAILED';
+      console.error('INIT_FAILED');
       console.error('❌ Initialization failed:', error);
       try {
         if (typeof showToast === 'function') showToast('โหลดแอปพลิเคชันไม่สำเร็จ: ' + error.message, 'error');
       } catch (_) {}
-      window.__vbInitState = 'idle';
       return false;
 
     } finally {
       console.log('FINALLY hide loading');
       try { if (typeof hideLoading === 'function') hideLoading(); } catch (e) {}
-      if (window.__vbInitState !== 'done') window.__vbInitPromise = null;
+      if (window.__vbInitState !== 'INIT_READY') window.__vbInitPromise = null;
     }
   })();
 
