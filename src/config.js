@@ -111,6 +111,20 @@
     return String(action || '').trim() === 'getWebAppInitialData';
   }
 
+  function isInitialDataAction(action) {
+    return String(action || '').trim() === 'getWebAppInitialData';
+  }
+
+  function isHttp404Error(err) {
+    return !!(err && (err.statusCode === 404 || String(err.message || err).indexOf('HTTP 404') > -1));
+  }
+
+  function sleepMs(ms) {
+    return new Promise(function(resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
   function isAbortLikeError_(err) {
     var msg = String(err && err.message ? err.message : err || '');
     return !!(err && err.name === 'AbortError') ||
@@ -196,7 +210,10 @@
             return fetch(requestUrl, fetchOptions)
               .then(function(response) {
                 if (!response.ok) {
-                  throw new Error('HTTP ' + response.status);
+                  var httpErr = new Error('HTTP ' + response.status);
+                  httpErr.statusCode = response.status;
+                  httpErr.requestUrl = requestUrl;
+                  throw httpErr;
                 }
                 return response.text();
               })
@@ -221,10 +238,19 @@
 
           var attempts = 0;
           var maxAttempts = shouldRetryOnce_(action) ? 2 : 1;
+          var http404RetryDelays = [1500, 3000, 5000];
 
           function executeWithRetry_() {
             attempts++;
             return runFetchAttempt_().catch(function(err) {
+              if (isInitialDataAction(action) && isHttp404Error(err) && attempts <= http404RetryDelays.length) {
+                global.__vbInitState = 'INIT_RETRYING';
+                console.warn('RETRY getWebAppInitialData ' + attempts + '/3 after HTTP 404');
+                try {
+                  if (typeof global.showToast === 'function') global.showToast('กำลังลองโหลดข้อมูลอีกครั้ง...', 'info');
+                } catch (_) {}
+                return sleepMs(http404RetryDelays[attempts - 1]).then(executeWithRetry_);
+              }
               if (isAbortLikeError_(err)) {
                 if (attempts < maxAttempts) return executeWithRetry_();
                 throw createFriendlyAbortError_();
