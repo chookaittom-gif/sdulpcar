@@ -7,6 +7,7 @@
   let isProcessing = false;
   const SAFE_INTERVAL = 1500;
   const REQUEST_TIMEOUT_MS = Number((G.APP_CONFIG && G.APP_CONFIG.requestTimeoutMs) || 60000);
+  const INITIAL_DATA_HTTP_404_RETRY_DELAYS = [1500, 3000, 5000];
   let lastRunTime = 0;
 
   G.googleScriptRunLimited = function(fnName, payload) {
@@ -64,6 +65,26 @@
     processNext();
   };
 
+  const retryInitialDataHttp404 = (req, msg) => {
+    if (req.fnName !== 'getWebAppInitialData') return false;
+    if (!msg.includes('HTTP 404')) return false;
+    const retryCount = Number(req.initialDataHttp404Retry || 0);
+    if (retryCount >= INITIAL_DATA_HTTP_404_RETRY_DELAYS.length) return false;
+
+    req.initialDataHttp404Retry = retryCount + 1;
+    G.__vbInitState = 'INIT_RETRYING';
+    console.warn('RETRY getWebAppInitialData ' + req.initialDataHttp404Retry + '/3 after HTTP 404');
+    try {
+      if (typeof G.showToast === 'function') G.showToast('กำลังลองโหลดข้อมูลอีกครั้ง...', 'info');
+    } catch (_) {}
+    if (req.timer) {
+      clearTimeout(req.timer);
+      req.timer = null;
+    }
+    setTimeout(function() { executeRequest(req); }, INITIAL_DATA_HTTP_404_RETRY_DELAYS[retryCount]);
+    return true;
+  };
+
   req.timer = setTimeout(function() {
     if (req.fnName === 'getWebAppInitialData' && Number(req.timeoutRetry || 0) < 1) {
       req.timeoutRetry = Number(req.timeoutRetry || 0) + 1;
@@ -103,6 +124,10 @@
             req.timer = null;
           }
           setTimeout(function() { executeRequest(req); }, 3000);
+          return;
+        }
+
+        if (retryInitialDataHttp404(req, msg)) {
           return;
         }
 
