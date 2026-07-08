@@ -6,8 +6,6 @@
   const requestQueue = [];
   let isProcessing = false;
   const SAFE_INTERVAL = 1500;
-  const REQUEST_TIMEOUT_MS = Number((G.APP_CONFIG && G.APP_CONFIG.requestTimeoutMs) || 60000);
-  const INITIAL_DATA_HTTP_404_RETRY_DELAYS = [1500, 3000, 5000];
   let lastRunTime = 0;
 
   G.googleScriptRunLimited = function(fnName, payload) {
@@ -45,66 +43,12 @@
 
  function executeRequest(req) {
   lastRunTime = Date.now();
-  if (req.settled) return;
-  if (req.timer) {
-    clearTimeout(req.timer);
-    req.timer = null;
-  }
-
-  const finishRequest = (type, value) => {
-    if (req.settled) return;
-    req.settled = true;
-    if (req.timer) {
-      clearTimeout(req.timer);
-      req.timer = null;
-    }
-    const idx = requestQueue.indexOf(req);
-    if (idx > -1) requestQueue.splice(idx, 1);
-    if (type === 'resolve') req.resolve(value);
-    else req.reject(value);
-    processNext();
-  };
-
-  const retryInitialDataHttp404 = (req, msg) => {
-    if (req.fnName !== 'getWebAppInitialData') return false;
-    if (!msg.includes('HTTP 404')) return false;
-    const retryCount = Number(req.initialDataHttp404Retry || 0);
-    if (retryCount >= INITIAL_DATA_HTTP_404_RETRY_DELAYS.length) return false;
-
-    req.initialDataHttp404Retry = retryCount + 1;
-    G.__vbInitState = 'INIT_RETRYING';
-    console.warn('RETRY getWebAppInitialData ' + req.initialDataHttp404Retry + '/3 after HTTP 404');
-    try {
-      if (typeof G.showToast === 'function') G.showToast('กำลังลองโหลดข้อมูลอีกครั้ง...', 'info');
-    } catch (_) {}
-    if (req.timer) {
-      clearTimeout(req.timer);
-      req.timer = null;
-    }
-    setTimeout(function() { executeRequest(req); }, INITIAL_DATA_HTTP_404_RETRY_DELAYS[retryCount]);
-    return true;
-  };
-
-  req.timer = setTimeout(function() {
-    if (req.fnName === 'getWebAppInitialData' && Number(req.timeoutRetry || 0) < 1) {
-      req.timeoutRetry = Number(req.timeoutRetry || 0) + 1;
-      console.warn('⚠️ Timeout retry ' + req.fnName + ' (' + req.timeoutRetry + '/1) after ' + REQUEST_TIMEOUT_MS + 'ms');
-      req.timer = null;
-      setTimeout(function() { executeRequest(req); }, 1500);
-      return;
-    }
-
-    const err = new Error('REQUEST_TIMEOUT_OR_ABORTED');
-    err.code = 'REQUEST_TIMEOUT_OR_ABORTED';
-    err.fnName = req.fnName;
-    console.error('❌ Timeout ' + req.fnName + ' after ' + REQUEST_TIMEOUT_MS + 'ms');
-    finishRequest('reject', err);
-  }, REQUEST_TIMEOUT_MS);
-
   try {
     google.script.run
       .withSuccessHandler(function(res) {
-        finishRequest('resolve', res);
+        requestQueue.shift();
+        req.resolve(res);
+        processNext();
       })
       .withFailureHandler(function(err) {
         const msg = String(err && err.message ? err.message : err || '');
@@ -112,31 +56,29 @@
         // ปิดเคส channel หลุด / tab เปลี่ยน / browser ปิด callback กลางทาง
         if (msg.includes('message channel closed') || msg.includes('asynchronous response')) {
           console.warn('⚠️ Connection interrupted (Benign):', req.fnName);
-          finishRequest('resolve', { ok: false, cancelled: true, benign: true, fnName: req.fnName, message: msg });
+          requestQueue.shift();
+          req.resolve({ ok: false, cancelled: true, benign: true, fnName: req.fnName, message: msg });
+          processNext();
           return;
         }
 
         if ((msg.includes('429') || msg.includes('Too Many Requests')) && req.retry < 3) {
           req.retry++;
           console.warn('⚠️ 429 Detected! Retrying ' + req.fnName + ' (' + req.retry + '/3) in 3s...');
-          if (req.timer) {
-            clearTimeout(req.timer);
-            req.timer = null;
-          }
           setTimeout(function() { executeRequest(req); }, 3000);
           return;
         }
 
-        if (retryInitialDataHttp404(req, msg)) {
-          return;
-        }
-
         console.error('❌ Failed ' + req.fnName + ':', err);
-        finishRequest('reject', err);
+        requestQueue.shift();
+        req.reject(err);
+        processNext();
       })[req.fnName](req.payload);
   } catch (e) {
     console.error('Local execution error:', e);
-    finishRequest('reject', e);
+    requestQueue.shift();
+    req.reject(e);
+    processNext();
   }
 }
 
@@ -971,7 +913,7 @@ async function syncClientBookingState_(force) {
         if (!force && last > 0 && (now - last) < 3000) return false;
         window.__VB_LAST_SYNC_AT__ = now;
 
-        const initData = await googleScriptRunLimited('getWebAppInitialData', force ? { forceRefresh: true, skipCache: true } : {});
+        const initData = await googleScriptRunLimited('getWebAppInitialData');
         if (!initData || !initData.ok || !initData.data) return false;
 
         window.allBookingsData = initData.data.bookings || [];
@@ -3848,12 +3790,9 @@ function renderCalendar(year, month) {
 
     // sync ข้อมูลล่าสุดก่อนวาดปฏิทิน (throttle ผ่าน syncClientBookingState_)
     const hasClientBookings = Array.isArray(window.allBookingsData) && window.allBookingsData.length > 0;
-    const calendarSyncKey = renderKey + ':' + Math.floor(nowMs / 30000);
-    const shouldSyncCalendar = !hasClientBookings || window.__VB_CAL_LAST_SYNC_KEY__ !== calendarSyncKey;
-    if (shouldSyncCalendar && !window.__VB_CAL_SYNC_BUSY__) {
-        window.__VB_CAL_LAST_SYNC_KEY__ = calendarSyncKey;
+    if (!hasClientBookings && !window.__VB_CAL_SYNC_BUSY__) {
         window.__VB_CAL_SYNC_BUSY__ = true;
-        syncClientBookingState_(false)
+        syncClientBookingState_()
             .then((refreshed) => {
                 if (refreshed) {
                     setTimeout(() => {
@@ -6572,15 +6511,15 @@ function wireVehicleCountAutoClampOnce_() {
   };
 })();
     
-/* ANCHOR: SESSION MANAGER (1 Hour Timeout) */
-function checkSessionTimeout_() {
-    const MAX_SESSION_MS = 3600000;
+/* ANCHOR: SESSION MANAGER (6 Hours Timeout) */
+function checkSessionTimeout() {
+    const maxSessionMs = 21600000;
     const lastLogin = localStorage.getItem('vb_login_ts');
     
     if (lastLogin) {
         const diff = Date.now() - Number(lastLogin);
-        if (diff > MAX_SESSION_MS) {
-            console.warn('⏳ Session expired (> 1 hour). Logging out...');
+        if (diff > maxSessionMs) {
+            console.warn('⏳ Session expired (> 6 hours). Logging out...');
             handleLogout(true);
             return false;
         }
@@ -7656,133 +7595,16 @@ function changeTimelineDate(deltaDays) {
 }
 
 
-function getInitialDataTimeoutMs() {
-  const cfgMs = Number((window.APP_CONFIG && window.APP_CONFIG.requestTimeoutMs) || 60000);
-  return Number.isFinite(cfgMs) && cfgMs > 0 ? cfgMs : 60000;
-}
-
-function createInitialDataFallback() {
-  return {
-    ok: true,
-    data: {
-      bookings: [],
-      vehicles: { vans: [], trucks: [], all: [] },
-      drivers: [],
-      projects: [],
-      user: { isLoggedIn: false, role: 'Guest' }
-    },
-    fallback: true
-  };
-}
-
-function getInitialDataRetryDelays() {
-  return [1500, 3000, 5000];
-}
-
-function waitInitialDataRetry(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function isHttp404InitialDataError(error) {
-  return !!(error && (error.statusCode === 404 || String(error.message || error).indexOf('HTTP 404') > -1));
-}
-
-function getInitialDataErrorLabel(error) {
-  if (isHttp404InitialDataError(error)) return 'HTTP 404';
-  return (error && (error.code || error.message)) ? (error.code || error.message) : 'unknown error';
-}
-
-function isRetryableInitialDataError(error) {
-  const label = getInitialDataErrorLabel(error);
-  return label === 'INITIAL_DATA_TIMEOUT' ||
-    label === 'REQUEST_TIMEOUT_OR_ABORTED';
-}
-
-function withInitialDataTimeout(promise, timeoutMs, attempt) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      const err = new Error('INITIAL_DATA_TIMEOUT');
-      err.code = 'INITIAL_DATA_TIMEOUT';
-      err.timeoutMs = timeoutMs;
-      err.attempt = attempt;
-      reject(err);
-    }, timeoutMs);
-
-    Promise.resolve(promise).then(
-      value => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(value);
-      },
-      err => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(err);
-      }
-    );
-  });
-}
-
-async function loadStartupInitialData(runner) {
-  const timeoutMs = getInitialDataTimeoutMs();
-  const retryDelays = getInitialDataRetryDelays();
-  const maxRetries = retryDelays.length;
-  console.log('START initial data');
-
-  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-    try {
-      console.log('WAIT getWebAppInitialData');
-      const initData = await withInitialDataTimeout(
-        runner('getWebAppInitialData', { startupAttempt: attempt }),
-        timeoutMs,
-        attempt
-      );
-      if (!initData || !initData.ok) throw new Error(initData ? initData.error : 'Init data missing');
-      console.log('SUCCESS getWebAppInitialData');
-      return initData;
-    } catch (error) {
-      const canRetry = attempt <= maxRetries && isRetryableInitialDataError(error);
-      if (canRetry) {
-        window.__vbInitState = 'INIT_RETRYING';
-        const reason = getInitialDataErrorLabel(error);
-        console.warn('RETRY getWebAppInitialData ' + attempt + '/' + maxRetries + ' after ' + reason);
-        try {
-          if (typeof showToast === 'function') showToast('กำลังลองโหลดข้อมูลอีกครั้ง...', 'info');
-        } catch (_) {}
-        await waitInitialDataRetry(retryDelays[attempt - 1]);
-        continue;
-      }
-
-      console.error('FAIL getWebAppInitialData', error);
-      console.error('INIT_FAILED');
-      window.__vbInitState = 'INIT_FAILED';
-      try {
-        if (typeof showToast === 'function') showToast('โหลดข้อมูลเริ่มต้นไม่สำเร็จ ระบบจะเปิดด้วยข้อมูลว่าง', 'error');
-      } catch (_) {}
-      return createInitialDataFallback();
-    }
-  }
-
-  console.error('INIT_FAILED');
-  window.__vbInitState = 'INIT_FAILED';
-  return createInitialDataFallback();
-}
-
 function initializeApp(options) {
   const silentIfRunning = !!(options && options.silentIfRunning);
-  if (window.__vbInitState === 'INIT_READY' || window.__vbInitState === 'done') return Promise.resolve(true);
-  if ((window.__vbInitState === 'INIT_LOADING' || window.__vbInitState === 'INIT_RETRYING' || window.__vbInitState === 'running') && window.__vbInitPromise) {
+  if (window.__vbInitState === 'done') return Promise.resolve(true);
+  if (window.__vbInitState === 'running' && window.__vbInitPromise) {
     if (!silentIfRunning) {
       console.info('ℹ️ initializeApp() already running. Returning existing promise.');
     }
     return window.__vbInitPromise;
   }
-  window.__vbInitState = 'INIT_LOADING';
+  window.__vbInitState = 'running';
 
   window.__vbInitPromise = (async () => {
     console.log('🚀 Initializing Vehicle Booking System (V-Berry Fix)...');
@@ -7790,9 +7612,10 @@ function initializeApp(options) {
     try {
       if (typeof showLoading === 'function') showLoading();
 
-      try { if (typeof checkSessionTimeout_ === 'function') checkSessionTimeout_(); } catch (e) {}
+      try { if (typeof checkSessionTimeout === 'function') checkSessionTimeout(); } catch (e) {}
 
-      const initData = await loadStartupInitialData(gas);
+      const initData = await gas('getWebAppInitialData');
+      if (!initData || !initData.ok) throw new Error(initData ? initData.error : 'Init data missing');
 
       window.allBookingsData = (initData.data && initData.data.bookings) || [];
       window.vehiclesList    = (initData.data && initData.data.vehicles) || { vans: [], trucks: [], all: [] };
@@ -7813,7 +7636,7 @@ function initializeApp(options) {
         const serverUser = (initData.data && initData.data.user) || null;
         const serverLoggedIn = !!(serverUser && serverUser.isLoggedIn);
 
-        if (!serverLoggedIn && localUser && typeof checkSessionTimeout_ === 'function' && checkSessionTimeout_()) {
+        if (!serverLoggedIn && localUser && typeof checkSessionTimeout === 'function' && checkSessionTimeout()) {
           currentUser = localUser;
         } else {
           currentUser = serverUser || { isLoggedIn: false, role: 'Guest' };
@@ -7832,29 +7655,21 @@ function initializeApp(options) {
       try { if (typeof installSelfTestFloatingButton === 'function') installSelfTestFloatingButton(); } catch (e) {}
       try { if (typeof wireVehicleCountAutoClampOnce_ === 'function') wireVehicleCountAutoClampOnce_(); } catch (e) {}
 
-      if (initData && initData.fallback) {
-        window.__vbInitState = 'INIT_FAILED';
-        return false;
-      }
-
-      window.__vbInitState = 'INIT_READY';
-      console.log('INIT_READY');
+      window.__vbInitState = 'done';
       console.log('✅ Application initialized successfully!');
       return true;
 
     } catch (error) {
-      window.__vbInitState = 'INIT_FAILED';
-      console.error('INIT_FAILED');
       console.error('❌ Initialization failed:', error);
       try {
         if (typeof showToast === 'function') showToast('โหลดแอปพลิเคชันไม่สำเร็จ: ' + error.message, 'error');
       } catch (_) {}
+      window.__vbInitState = 'idle';
       return false;
 
     } finally {
-      console.log('FINALLY hide loading');
       try { if (typeof hideLoading === 'function') hideLoading(); } catch (e) {}
-      if (window.__vbInitState !== 'INIT_READY') window.__vbInitPromise = null;
+      if (window.__vbInitState !== 'done') window.__vbInitPromise = null;
     }
   })();
 
@@ -11413,7 +11228,7 @@ window.loadBookingsView = function() {
   // ถ้ามีข้อมูลใหม่ จะสั่ง re-render อีก 1 รอบเพื่อให้ตาราง/ปฏิทินตรงกัน
   if (!window.__VB_BOOKINGS_SYNC_BUSY__) {
     window.__VB_BOOKINGS_SYNC_BUSY__ = true;
-    syncClientBookingState_(false)
+    syncClientBookingState_()
       .then((refreshed) => {
         if (refreshed) {
           setTimeout(() => {
