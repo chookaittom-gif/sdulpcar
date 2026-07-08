@@ -7616,47 +7616,143 @@ function initializeApp(options) {
     return window.vbInitPromise;
   }
   window.vbInitState = 'LOADING';
+  window.vbInitRequestToken = Number(window.vbInitRequestToken || 0) + 1;
+  const requestToken = window.vbInitRequestToken;
+
+  function isCurrentInitRequest() {
+    return window.vbInitRequestToken === requestToken;
+  }
+
+  function sleepInitialDataRetry(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function getInitialDataRetryReason(error) {
+    const response = error && error.initResponse ? error.initResponse : null;
+    const rawMessage = String(
+      (error && error.message) ||
+      (response && (response.error || response.message)) ||
+      error ||
+      ''
+    );
+    const message = rawMessage.toLowerCase();
+
+    if (!error && !response) return 'empty response';
+    if (response && (response.cancelled || response.benign)) return 'Apps Script response interrupted';
+    if (message.indexOf('http 404') > -1 || message.indexOf('404') > -1) return 'HTTP 404';
+    if (message.indexOf('timeout') > -1 || message.indexOf('timed out') > -1) return 'timeout';
+    if (message.indexOf('abort') > -1 || message.indexOf('aborted') > -1) return 'timeout';
+    if (message.indexOf('failed to fetch') > -1 || message.indexOf('network') > -1) return 'network error';
+    if (message.indexOf('message channel closed') > -1 || message.indexOf('asynchronous response') > -1) return 'Apps Script response interrupted';
+    if (message.indexOf('empty initial data response') > -1 || message.indexOf('init data missing') > -1) return 'empty response';
+    if (message.indexOf('initial data payload missing') > -1) return 'empty response';
+    return '';
+  }
+
+  function clearInitialDataError() {
+    const panel = document.getElementById('vb-init-error-panel');
+    if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+  }
+
+  function showInitialDataError(error) {
+    const message = String(error && error.message ? error.message : error || 'โหลดข้อมูลไม่สำเร็จ');
+    let panel = document.getElementById('vb-init-error-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'vb-init-error-panel';
+      panel.setAttribute('role', 'alert');
+      panel.style.cssText = 'margin:12px auto; max-width:960px; padding:14px 16px; border:1px solid #fecaca; border-radius:12px; background:#fef2f2; color:#991b1b; display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;';
+      const main = document.querySelector('main.container') || document.body;
+      main.insertBefore(panel, main.firstChild);
+    }
+
+    panel.innerHTML = '';
+    const text = document.createElement('div');
+    text.style.cssText = 'min-width:220px; flex:1 1 260px; line-height:1.45;';
+    text.textContent = 'โหลดข้อมูลเริ่มต้นไม่สำเร็จ กรุณาตรวจสัญญาณอินเทอร์เน็ตแล้วลองโหลดใหม่';
+
+    const detail = document.createElement('div');
+    detail.style.cssText = 'font-size:0.85rem; color:#7f1d1d; margin-top:4px;';
+    detail.textContent = 'รายละเอียด: ' + message;
+    text.appendChild(detail);
+
+    const retryButton = document.createElement('button');
+    retryButton.type = 'button';
+    retryButton.className = 'btn btn-primary';
+    retryButton.style.cssText = 'min-height:44px;';
+    retryButton.textContent = 'โหลดข้อมูลใหม่';
+    retryButton.addEventListener('click', function() {
+      if (window.vbInitState === 'LOADING' || window.vbInitState === 'RETRYING') return;
+      retryButton.disabled = true;
+      retryButton.textContent = 'กำลังโหลด...';
+      initializeApp({ source: 'manual-retry' });
+    }, { once: true });
+
+    panel.appendChild(text);
+    panel.appendChild(retryButton);
+  }
 
   window.vbInitPromise = (async () => {
     console.log('🚀 Initializing Vehicle Booking System (V-Berry Fix)...');
 
     try {
       console.log('START initial data');
+      clearInitialDataError();
       if (typeof showLoading === 'function') showLoading();
 
       try { if (typeof checkSessionTimeout === 'function') checkSessionTimeout(); } catch (e) {}
 
       let initData = null;
-      let attempts = 0;
-      const retryDelays = [1500, 3000, 5000];
+      let retryCount = 0;
+      const retryDelays = [800, 1500, 3000];
 
       while (true) {
         try {
           console.log('WAIT getWebAppInitialData');
           initData = await gas('getWebAppInitialData');
-          if (!initData || !initData.ok) {
-            throw new Error(initData ? initData.error : 'Init data missing');
+          if (!isCurrentInitRequest()) {
+            console.warn('STALE getWebAppInitialData response discarded');
+            return false;
+          }
+          if (!initData) {
+            throw new Error('Empty initial data response');
+          }
+          if (!initData.ok) {
+            const initError = new Error(initData.error || initData.message || 'Init data missing');
+            initError.initResponse = initData;
+            throw initError;
+          }
+          if (!initData.data) {
+            throw new Error('Initial data payload missing');
           }
           break;
         } catch (error) {
-          const is404 = !!(error && (error.statusCode === 404 || String(error.message || error).indexOf('HTTP 404') > -1));
-          attempts++;
-          if (is404 && attempts <= retryDelays.length) {
+          if (!isCurrentInitRequest()) {
+            console.warn('STALE getWebAppInitialData error discarded');
+            return false;
+          }
+          const retryReason = getInitialDataRetryReason(error);
+          if (retryReason && retryCount < retryDelays.length) {
+            retryCount++;
             window.vbInitState = 'RETRYING';
-            console.warn(`RETRY getWebAppInitialData ${attempts}/3 after HTTP 404`);
+            console.warn(`RETRY getWebAppInitialData ${retryCount}/3 after ${retryReason}:`, error);
             try {
               if (typeof showToast === 'function') {
                 showToast('กำลังโหลดข้อมูลอีกครั้ง...', 'info');
               }
-            } catch (_) {}
-            await new Promise(resolve => setTimeout(resolve, retryDelays[attempts - 1]));
+            } catch (ignoredError) {}
+            await sleepInitialDataRetry(retryDelays[retryCount - 1]);
           } else {
-            console.error('INIT_FAILED after retries');
+            console.error('INIT_FAILED after retries:', error);
             throw error;
           }
         }
       }
 
+      if (!isCurrentInitRequest()) {
+        console.warn('STALE initializeApp success discarded');
+        return false;
+      }
       console.log('SUCCESS getWebAppInitialData');
 
       // Clear any leftover toast or error state
@@ -7722,14 +7818,17 @@ function initializeApp(options) {
         if (typeof showToast === 'function') {
           showToast('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่ค่ะ ⏳', 'error');
         }
-      } catch (_) {}
-      window.vbInitState = 'FAILED';
+      } catch (ignoredError) {}
+      if (isCurrentInitRequest()) {
+        showInitialDataError(error);
+        window.vbInitState = 'FAILED';
+      }
       return false;
 
     } finally {
       console.log('FINALLY hide loading');
       try { if (typeof hideLoading === 'function') hideLoading(); } catch (e) {}
-      if (window.vbInitState !== 'READY') window.vbInitPromise = null;
+      if (isCurrentInitRequest() && window.vbInitState !== 'READY') window.vbInitPromise = null;
     }
   })();
 
