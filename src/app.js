@@ -887,7 +887,7 @@ window.submitSuspend = async function(e) {
         closeModalA11y('suspend-modal');
         if (typeof showToast === 'function') showToast('บันทึกข้อมูลเรียบร้อยค่ะ 🗓️', 'success');
         
-        await refreshBookingUiAfterMutation_({ forceSync: true });
+        await refreshBookingUiAfterMutation({ forceSync: true });
 
         await googleScriptRun('apiRefreshDashboard'); 
         
@@ -906,12 +906,21 @@ window.submitSuspend = async function(e) {
     }
 };
 
-async function syncClientBookingState_(force) {
+async function syncClientBookingState(force) {
     try {
         const now = Date.now();
-        const last = Number(window.__VB_LAST_SYNC_AT__ || 0);
+        const last = Number(window.vbLastSyncAt || 0);
         if (!force && last > 0 && (now - last) < 3000) return false;
-        window.__VB_LAST_SYNC_AT__ = now;
+        window.vbLastSyncAt = now;
+
+        if (window.vbInitState === 'LOADING' || window.vbInitState === 'RETRYING') {
+            console.log('⏳ syncClientBookingState deferring: App is currently initializing.');
+            if (window.vbInitPromise) {
+                const initSuccess = await window.vbInitPromise;
+                if (initSuccess) return true;
+            }
+            return false;
+        }
 
         const initData = await googleScriptRunLimited('getWebAppInitialData');
         if (!initData || !initData.ok || !initData.data) return false;
@@ -925,14 +934,14 @@ async function syncClientBookingState_(force) {
         if (typeof updateCounters === 'function') updateCounters();
         return true;
     } catch (e) {
-        console.warn('syncClientBookingState_ failed', e);
+        console.warn('syncClientBookingState failed', e);
         return false;
     }
 }
 
-async function refreshBookingUiAfterMutation_(options) {
+async function refreshBookingUiAfterMutation(options) {
     const opts = options || {};
-    await syncClientBookingState_(opts.forceSync === true);
+    await syncClientBookingState(opts.forceSync === true);
 
     if (opts.reloadBookings !== false && typeof loadBookingsView === 'function') {
         loadBookingsView();
@@ -2433,8 +2442,8 @@ document.addEventListener('visibilitychange', () => {
 })();
 
 window.addEventListener('load', async function () {
-  if (window.__VB_LOAD_INIT_DONE__) return;
-  window.__VB_LOAD_INIT_DONE__ = true;
+  if (window.vbLoadInitDone) return;
+  window.vbLoadInitDone = true;
 
   console.log('🚀 Application Starting...');
 
@@ -3788,11 +3797,11 @@ function renderCalendar(year, month) {
     window.calendarState.currentYear = year;
     window.calendarState.currentMonth = month;
 
-    // sync ข้อมูลล่าสุดก่อนวาดปฏิทิน (throttle ผ่าน syncClientBookingState_)
+    // sync ข้อมูลล่าสุดก่อนวาดปฏิทิน (throttle ผ่าน syncClientBookingState)
     const hasClientBookings = Array.isArray(window.allBookingsData) && window.allBookingsData.length > 0;
-    if (!hasClientBookings && !window.__VB_CAL_SYNC_BUSY__) {
-        window.__VB_CAL_SYNC_BUSY__ = true;
-        syncClientBookingState_()
+    if (!hasClientBookings && !window.vbCalSyncBusy) {
+        window.vbCalSyncBusy = true;
+        syncClientBookingState()
             .then((refreshed) => {
                 if (refreshed) {
                     setTimeout(() => {
@@ -3803,7 +3812,7 @@ function renderCalendar(year, month) {
                 }
             })
             .catch((e) => console.warn('calendar pre-sync failed', e))
-            .finally(() => { window.__VB_CAL_SYNC_BUSY__ = false; });
+            .finally(() => { window.vbCalSyncBusy = false; });
     }
 
     const today = new Date();
@@ -5309,7 +5318,7 @@ window.submitRejectBooking = async function() {
         });
         if (!res || !res.ok) throw new Error(res?.error || 'Server error');
         
-        await refreshBookingUiAfterMutation_({ forceSync: true });
+        await refreshBookingUiAfterMutation({ forceSync: true });
         showToast('ไม่อนุมัติสำเร็จ ✅', 'success');
         state.isSubmitting = false; // ปลดล็อกก่อนปิด
         window.closeRejectModal();
@@ -6237,7 +6246,7 @@ window.executeQuickApprove = async function() {
         });
 
         if (res && res.ok) {
-            await refreshBookingUiAfterMutation_({ forceSync: true });
+            await refreshBookingUiAfterMutation({ forceSync: true });
             showToast(`⚡ อนุมัติด่วนรถ ${selectedPlate} สำเร็จแล้วค่ะ`, "success");
             closeQaModal();
             if (typeof closeActivityModal === 'function') closeActivityModal();
@@ -6324,13 +6333,13 @@ function updateHeaderUI(user) {
     }
 }
     
-function wireVehicleCountAutoClampOnce_() {
+function wireVehicleCountAutoClampOnce() {
     const inputs = document.querySelectorAll('input[name="vehicleCount"], #booking-vehicle-count');
     if (!inputs.length) return;
 
     inputs.forEach(el => {
-        if (el.__CLAMP_WIRED__) return;
-        el.__CLAMP_WIRED__ = true;
+        if (el.clampWired) return;
+        el.clampWired = true;
 
         const enforceLimit = () => {
             let val = parseInt(el.value);
@@ -6348,10 +6357,10 @@ function wireVehicleCountAutoClampOnce_() {
                 
                 if(typeof showToast === 'function') {
                     // ใช้ Debounce กัน Toast เด้งรัว
-                    if(!window.__toast_clamp_debounce) {
-                        window.__toast_clamp_debounce = setTimeout(() => {
+                    if(!window.toastClampDebounce) {
+                        window.toastClampDebounce = setTimeout(() => {
                             showToast(`เลือกได้สูงสุด ${max} คันเท่านั้นค่ะ 🐱`, 'warning');
-                            window.__toast_clamp_debounce = null;
+                            window.toastClampDebounce = null;
                         }, 1000);
                     }
                 }
@@ -6515,12 +6524,12 @@ function wireVehicleCountAutoClampOnce_() {
     
 /* ANCHOR: SESSION MANAGER (6 Hours Timeout) */
 function checkSessionTimeout() {
-    const maxSessionMs = 21600000;
+    const sessionTimeoutMs = 6 * 60 * 60 * 1000;
     const lastLogin = localStorage.getItem('vb_login_ts');
     
     if (lastLogin) {
         const diff = Date.now() - Number(lastLogin);
-        if (diff > maxSessionMs) {
+        if (diff > sessionTimeoutMs) {
             console.warn('⏳ Session expired (> 6 hours). Logging out...');
             handleLogout(true);
             return false;
@@ -7191,7 +7200,7 @@ window.handleAssignmentSave = async function () {
 
     if(typeof closeModalA11y === 'function') closeModalA11y('assignment-modal');
 
-    await refreshBookingUiAfterMutation_({ forceSync: true });
+    await refreshBookingUiAfterMutation({ forceSync: true });
 
     // Refresh UI ส่วนต่างๆ
 
@@ -7352,7 +7361,7 @@ window.handleAssignmentReject = async function () {
     const res = await googleScriptRunLimited('updateBookingStatus', payload);
     if (!res || !res.ok) throw new Error(res?.error || 'Reject failed');
 
-    await refreshBookingUiAfterMutation_({ forceSync: true });
+    await refreshBookingUiAfterMutation({ forceSync: true });
     if (typeof showToast === 'function') showToast('⛔ ปฏิเสธการจองเรียบร้อย', 'info');
     if (typeof closeModalA11y === 'function') closeModalA11y('assignment-modal');
   } catch (err) {
@@ -7599,25 +7608,60 @@ function changeTimelineDate(deltaDays) {
 
 function initializeApp(options) {
   const silentIfRunning = !!(options && options.silentIfRunning);
-  if (window.__vbInitState === 'done') return Promise.resolve(true);
-  if (window.__vbInitState === 'running' && window.__vbInitPromise) {
+  if (window.vbInitState === 'READY') return Promise.resolve(true);
+  if ((window.vbInitState === 'LOADING' || window.vbInitState === 'RETRYING') && window.vbInitPromise) {
     if (!silentIfRunning) {
       console.info('ℹ️ initializeApp() already running. Returning existing promise.');
     }
-    return window.__vbInitPromise;
+    return window.vbInitPromise;
   }
-  window.__vbInitState = 'running';
+  window.vbInitState = 'LOADING';
 
-  window.__vbInitPromise = (async () => {
+  window.vbInitPromise = (async () => {
     console.log('🚀 Initializing Vehicle Booking System (V-Berry Fix)...');
 
     try {
+      console.log('START initial data');
       if (typeof showLoading === 'function') showLoading();
 
       try { if (typeof checkSessionTimeout === 'function') checkSessionTimeout(); } catch (e) {}
 
-      const initData = await gas('getWebAppInitialData');
-      if (!initData || !initData.ok) throw new Error(initData ? initData.error : 'Init data missing');
+      let initData = null;
+      let attempts = 0;
+      const retryDelays = [1500, 3000, 5000];
+
+      while (true) {
+        try {
+          console.log('WAIT getWebAppInitialData');
+          initData = await gas('getWebAppInitialData');
+          if (!initData || !initData.ok) {
+            throw new Error(initData ? initData.error : 'Init data missing');
+          }
+          break;
+        } catch (error) {
+          const is404 = !!(error && (error.statusCode === 404 || String(error.message || error).indexOf('HTTP 404') > -1));
+          attempts++;
+          if (is404 && attempts <= retryDelays.length) {
+            window.vbInitState = 'RETRYING';
+            console.warn(`RETRY getWebAppInitialData ${attempts}/3 after HTTP 404`);
+            try {
+              if (typeof showToast === 'function') {
+                showToast('กำลังโหลดข้อมูลอีกครั้ง...', 'info');
+              }
+            } catch (_) {}
+            await new Promise(resolve => setTimeout(resolve, retryDelays[attempts - 1]));
+          } else {
+            console.error('INIT_FAILED after retries');
+            throw error;
+          }
+        }
+      }
+
+      console.log('SUCCESS getWebAppInitialData');
+
+      // Clear any leftover toast or error state
+      const toastEl = document.getElementById('vtoast');
+      if (toastEl) toastEl.style.display = 'none';
 
       window.allBookingsData = (initData.data && initData.data.bookings) || [];
       window.vehiclesList    = (initData.data && initData.data.vehicles) || { vans: [], trucks: [], all: [] };
@@ -7655,28 +7699,41 @@ function initializeApp(options) {
       try { if (typeof updateCounters === 'function') updateCounters(); } catch (e) {}
       try { if (typeof syncReturnDateWithStartDate === 'function') syncReturnDateWithStartDate(); } catch (e) {}
       try { if (typeof installSelfTestFloatingButton === 'function') installSelfTestFloatingButton(); } catch (e) {}
-      try { if (typeof wireVehicleCountAutoClampOnce_ === 'function') wireVehicleCountAutoClampOnce_(); } catch (e) {}
+      try { if (typeof wireVehicleCountAutoClampOnce === 'function') wireVehicleCountAutoClampOnce(); } catch (e) {}
 
-      window.__vbInitState = 'done';
+      window.vbInitState = 'READY';
       window.isAppInitialized = true;
+      console.log('INIT_READY');
       console.log('✅ Application initialized successfully!');
+
+      try {
+        if (typeof renderCalendar === 'function' && window.calendarState) {
+          renderCalendar(window.calendarState.currentYear, window.calendarState.currentMonth);
+        }
+      } catch (e) {
+        console.warn('renderCalendar warning:', e);
+      }
+
       return true;
 
     } catch (error) {
       console.error('❌ Initialization failed:', error);
       try {
-        if (typeof showToast === 'function') showToast('โหลดแอปพลิเคชันไม่สำเร็จ: ' + error.message, 'error');
+        if (typeof showToast === 'function') {
+          showToast('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่ค่ะ ⏳', 'error');
+        }
       } catch (_) {}
-      window.__vbInitState = 'idle';
+      window.vbInitState = 'FAILED';
       return false;
 
     } finally {
+      console.log('FINALLY hide loading');
       try { if (typeof hideLoading === 'function') hideLoading(); } catch (e) {}
-      if (window.__vbInitState !== 'done') window.__vbInitPromise = null;
+      if (window.vbInitState !== 'READY') window.vbInitPromise = null;
     }
   })();
 
-  return window.__vbInitPromise;
+  return window.vbInitPromise;
 }
 
 
@@ -9314,7 +9371,7 @@ window.submitBooking = async function(event) {
         
         closeBookingForm();
         
-        await refreshBookingUiAfterMutation_({ forceSync: true });
+        await refreshBookingUiAfterMutation({ forceSync: true });
         
     } catch (err) {
         console.error("❌ [Client] Error:", err);
@@ -9366,7 +9423,7 @@ window.submitCancelBooking = async function(event) {
         if (typeof window.closeCancelForm === 'function') window.closeCancelForm();
         
         // 4. รีโหลดหน้า (ตาราง, ปฏิทิน, ตัวนับ)
-        await refreshBookingUiAfterMutation_({ forceSync: true });
+        await refreshBookingUiAfterMutation({ forceSync: true });
 
     } catch (err) {
         console.error("❌ [Client] Cancel Error:", err);
@@ -11229,9 +11286,9 @@ window.loadBookingsView = function() {
 
   // ดึงข้อมูลล่าสุดจาก server แบบ throttle ก่อนเรนเดอร์
   // ถ้ามีข้อมูลใหม่ จะสั่ง re-render อีก 1 รอบเพื่อให้ตาราง/ปฏิทินตรงกัน
-  if (!window.__VB_BOOKINGS_SYNC_BUSY__) {
-    window.__VB_BOOKINGS_SYNC_BUSY__ = true;
-    syncClientBookingState_()
+  if (!window.vbBookingsSyncBusy) {
+    window.vbBookingsSyncBusy = true;
+    syncClientBookingState()
       .then((refreshed) => {
         if (refreshed) {
           setTimeout(() => {
@@ -11243,7 +11300,7 @@ window.loadBookingsView = function() {
         }
       })
       .catch((e) => console.warn('bookings pre-sync failed', e))
-      .finally(() => { window.__VB_BOOKINGS_SYNC_BUSY__ = false; });
+      .finally(() => { window.vbBookingsSyncBusy = false; });
   }
 
   const tbody = document.getElementById('bookings-table-body');

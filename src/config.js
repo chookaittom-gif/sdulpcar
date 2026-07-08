@@ -1,4 +1,4 @@
-(function initStaticConfig_(global) {
+(function initStaticConfig(global) {
   var APP_CONFIG = {
     webAppUrl: 'https://script.google.com/macros/s/AKfycbx9YcO01C1dJxS_5lfZPALEWdSelp1QMEaWWUlDN7Kjc9OSudzW520a0ZJ95y0qOA-p-A/exec',
     requestTimeoutMs: 60000,
@@ -88,26 +88,26 @@
     apiGetFuelFormOptions: 60000
   };
 
-  function normalizeUrl_(url) {
+  function normalizeUrl(url) {
     return String(url || '').trim();
   }
 
-  function buildRequestKey_(action, payload) {
+  function buildRequestKey(action, payload) {
     return action + '::' + JSON.stringify(payload == null ? null : payload);
   }
 
-  function isReadAction_(action) {
+  function isReadAction(action) {
     return READ_API_ACTIONS[String(action || '').trim()] === true;
   }
 
-  function buildGetUrl_(baseUrl, action, payload) {
+  function buildGetUrl(baseUrl, action, payload) {
     var url = new URL(baseUrl);
     url.searchParams.set('action', action);
     url.searchParams.set('payload', JSON.stringify(payload == null ? {} : payload));
     return url.toString();
   }
 
-  function shouldRetryOnce_(action) {
+  function shouldRetryOnce(action) {
     return String(action || '').trim() === 'getWebAppInitialData';
   }
 
@@ -125,28 +125,28 @@
     });
   }
 
-  function isAbortLikeError_(err) {
+  function isAbortLikeError(err) {
     var msg = String(err && err.message ? err.message : err || '');
     return !!(err && err.name === 'AbortError') ||
       msg.indexOf('AbortError') > -1 ||
       msg.indexOf('signal is aborted') > -1;
   }
 
-  function createFriendlyAbortError_() {
+  function createFriendlyAbortError() {
     var err = new Error('REQUEST_TIMEOUT_OR_ABORTED');
     err.code = 'REQUEST_TIMEOUT_OR_ABORTED';
     err.userMessage = 'โหลดข้อมูลเริ่มต้นไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
     return err;
   }
 
-  function createApiClient_(cfg) {
+  function createApiClient(cfg) {
     var queue = [];
     var busy = false;
     var lastRunAt = 0;
     var inflight = new Map();
     var responseCache = new Map();
 
-    function processNext_() {
+    function processNext() {
       if (!queue.length) {
         busy = false;
         return;
@@ -161,18 +161,18 @@
       }, waitMs);
     }
 
-    function apiCall_(action, payload) {
+    function apiCall(action, payload) {
       action = String(action || '').trim();
       if (!API_ACTIONS[action]) {
         return Promise.reject(new Error('Unknown action: ' + action + '. Supported actions: ' + Object.keys(API_ACTIONS).sort().join(', ')));
       }
 
-      var webAppUrl = normalizeUrl_(cfg.webAppUrl);
+      var webAppUrl = normalizeUrl(cfg.webAppUrl);
       if (!webAppUrl || webAppUrl === 'PASTE_APPS_SCRIPT_WEB_APP_URL_HERE') {
         return Promise.reject(new Error('APP_CONFIG.webAppUrl is not configured'));
       }
 
-      var requestKey = buildRequestKey_(action, payload);
+      var requestKey = buildRequestKey(action, payload);
       var cacheTtl = CACHEABLE_API_ACTIONS[action] || 0;
       var cached = cacheTtl ? responseCache.get(requestKey) : null;
       if (cached && (Date.now() - cached.ts) < cacheTtl) return Promise.resolve(cached.value);
@@ -180,8 +180,8 @@
 
       var pending = new Promise(function(resolve, reject) {
         queue.push(function() {
-          var useGet = isReadAction_(action);
-          var requestUrl = useGet ? buildGetUrl_(webAppUrl, action, payload) : webAppUrl;
+          var useGet = isReadAction(action);
+          var requestUrl = useGet ? buildGetUrl(webAppUrl, action, payload) : webAppUrl;
           var baseFetchOptions = {
             method: useGet ? 'GET' : 'POST',
             mode: 'cors',
@@ -199,7 +199,7 @@
             });
           }
 
-          function runFetchAttempt_() {
+          function runFetchAttempt() {
             var controller = typeof AbortController === 'function' ? new AbortController() : null;
             var timeoutId = controller ? setTimeout(function() {
               controller.abort();
@@ -237,29 +237,29 @@
           }
 
           var attempts = 0;
-          var maxAttempts = shouldRetryOnce_(action) ? 2 : 1;
+          var maxAttempts = shouldRetryOnce(action) ? 2 : 1;
           var http404RetryDelays = [1500, 3000, 5000];
 
-          function executeWithRetry_() {
+          function executeWithRetry() {
             attempts++;
-            return runFetchAttempt_().catch(function(err) {
+            return runFetchAttempt().catch(function(err) {
               if (isInitialDataAction(action) && isHttp404Error(err) && attempts <= http404RetryDelays.length) {
-                global.__vbInitState = 'INIT_RETRYING';
+                global.vbInitState = 'RETRYING';
                 console.warn('RETRY getWebAppInitialData ' + attempts + '/3 after HTTP 404');
                 try {
                   if (typeof global.showToast === 'function') global.showToast('กำลังลองโหลดข้อมูลอีกครั้ง...', 'info');
                 } catch (_) {}
-                return sleepMs(http404RetryDelays[attempts - 1]).then(executeWithRetry_);
+                return sleepMs(http404RetryDelays[attempts - 1]).then(executeWithRetry);
               }
-              if (isAbortLikeError_(err)) {
-                if (attempts < maxAttempts) return executeWithRetry_();
-                throw createFriendlyAbortError_();
+              if (isAbortLikeError(err)) {
+                if (attempts < maxAttempts) return executeWithRetry();
+                throw createFriendlyAbortError();
               }
               throw err;
             });
           }
 
-          executeWithRetry_()
+          executeWithRetry()
             .then(function(result) {
               if (!useGet || action === 'apiRefreshDashboard' || action === 'clearInitialCache') {
                 responseCache.clear();
@@ -270,18 +270,18 @@
             .catch(reject)
             .finally(function() {
               inflight.delete(requestKey);
-              processNext_();
+              processNext();
             });
         });
 
-        if (!busy) processNext_();
+        if (!busy) processNext();
       });
 
       inflight.set(requestKey, pending);
       return pending;
     }
 
-    function createRunnerState_(state) {
+    function createRunnerState(state) {
       var runnerState = state || {
         successHandler: null,
         failureHandler: null,
@@ -292,7 +292,7 @@
         get: function(_target, prop) {
           if (prop === 'withSuccessHandler') {
             return function(handler) {
-              return createRunnerState_({
+              return createRunnerState({
                 successHandler: handler,
                 failureHandler: runnerState.failureHandler,
                 userObject: runnerState.userObject
@@ -302,7 +302,7 @@
 
           if (prop === 'withFailureHandler') {
             return function(handler) {
-              return createRunnerState_({
+              return createRunnerState({
                 successHandler: runnerState.successHandler,
                 failureHandler: handler,
                 userObject: runnerState.userObject
@@ -312,7 +312,7 @@
 
           if (prop === 'withUserObject') {
             return function(userObject) {
-              return createRunnerState_({
+              return createRunnerState({
                 successHandler: runnerState.successHandler,
                 failureHandler: runnerState.failureHandler,
                 userObject: userObject
@@ -323,7 +323,7 @@
           if (typeof prop !== 'string') return undefined;
 
           return function(payload) {
-            return apiCall_(prop, payload)
+            return apiCall(prop, payload)
               .then(function(result) {
                 if (typeof runnerState.successHandler === 'function') {
                   runnerState.successHandler(result, runnerState.userObject);
@@ -343,18 +343,18 @@
     }
 
     return {
-      call: apiCall_,
+      call: apiCall,
       createRunner: function() {
-        return createRunnerState_();
+        return createRunnerState();
       }
     };
   }
 
   global.APP_CONFIG = APP_CONFIG;
   global.API_ACTIONS = API_ACTIONS;
-  global.__VB_API_CLIENT__ = createApiClient_(APP_CONFIG);
-  global.apiCall = global.__VB_API_CLIENT__.call;
+  global.vbApiClient = createApiClient(APP_CONFIG);
+  global.apiCall = global.vbApiClient.call;
   global.google = global.google || {};
   global.google.script = global.google.script || {};
-  global.google.script.run = global.__VB_API_CLIENT__.createRunner();
+  global.google.script.run = global.vbApiClient.createRunner();
 })(window);
