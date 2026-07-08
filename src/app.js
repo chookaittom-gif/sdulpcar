@@ -6378,8 +6378,10 @@ function wireVehicleCountAutoClampOnce_() {
         var today = new Date();
         var month = today.getMonth() + 1;
         var year = today.getFullYear();
-        if (typeof loadCalendarView === 'function') loadCalendarView(year, month);
-        if (typeof loadBookingsView === 'function') loadBookingsView();
+        if (window.isAppInitialized) {
+            if (typeof loadCalendarView === 'function') loadCalendarView(year, month);
+            if (typeof loadBookingsView === 'function') loadBookingsView();
+        }
 
         if (!isForced) {
             google.script.run
@@ -6392,7 +6394,7 @@ function wireVehicleCountAutoClampOnce_() {
                 })
                 .logoutUser();
         } else {
-             showToast('หมดเวลาการใช้งาน (1 ชั่วโมง) กรุณาเข้าสู่ระบบใหม่ค่ะ ⏳', 'warning');
+             showToast('หมดเวลาการใช้งาน (6 ชั่วโมง) กรุณาเข้าสู่ระบบใหม่ค่ะ ⏳', 'warning');
         }
     }
 
@@ -7656,6 +7658,7 @@ function initializeApp(options) {
       try { if (typeof wireVehicleCountAutoClampOnce_ === 'function') wireVehicleCountAutoClampOnce_(); } catch (e) {}
 
       window.__vbInitState = 'done';
+      window.isAppInitialized = true;
       console.log('✅ Application initialized successfully!');
       return true;
 
@@ -10680,11 +10683,11 @@ window.runSelfTest = window.selfTest;
 
 
 // Initializer (คงเดิมไว้)
-(function runBoot_(){
+(function runBoot(){
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeApp);
   } else {
-    // Initialization will be handled by DOMContentLoaded listener.
+    initializeApp();
   }
 })();
 
