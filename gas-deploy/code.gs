@@ -471,51 +471,37 @@ function getMainData_(options) {
       return s || 'A';
     };
     const lastCol = sh.getLastColumn();
-    const headerRangeA1 = sheetNameA1 + '!A1:' + toA1Col_(lastCol) + '1';
-    let headers = [];
-    try {
-      const headerResp = Sheets.Spreadsheets.Values.get(spreadsheetId, headerRangeA1, {
-        majorDimension: 'ROWS',
-        valueRenderOption: 'UNFORMATTED_VALUE',
-        dateTimeRenderOption: 'SERIAL_NUMBER'
-      });
-      const headerRow = (headerResp && headerResp.values && headerResp.values[0]) ? headerResp.values[0] : [];
-      headers = Array.from({ length: lastCol }, (_, c) => String(headerRow[c] || '').trim());
-    } catch (sheetApiErr) {
-      Logger.log('getMainData_ header read fallback to getValues: ' + (sheetApiErr && sheetApiErr.message ? sheetApiErr.message : sheetApiErr));
-      headers = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
-    }
-    const idx = headerIndex_(headers);
-
     const lastRow = sh.getLastRow();
-    const startRow = 2; 
-    
-    if (lastRow < startRow) {
-        return { 
-            ok: true, 
-            data: { bookings:[], vehicles: {}, drivers:[], totalBookings: 0, projects:[] } 
-        };
-    }
-
-    const numRows = (lastRow - startRow) + 1;
-    const dataRangeA1 = sheetNameA1 + '!A' + startRow + ':' + toA1Col_(headers.length) + lastRow;
+    let headers = [];
     let values = [];
+    
+    const fullRangeA1 = sheetNameA1 + '!A1:' + toA1Col_(lastCol) + lastRow;
     try {
-      const dataResp = Sheets.Spreadsheets.Values.get(spreadsheetId, dataRangeA1, {
+      const fullResp = Sheets.Spreadsheets.Values.get(spreadsheetId, fullRangeA1, {
         majorDimension: 'ROWS',
         valueRenderOption: 'UNFORMATTED_VALUE',
         dateTimeRenderOption: 'SERIAL_NUMBER'
       });
-      const rawValues = (dataResp && dataResp.values) ? dataResp.values : [];
+      const rows = fullResp && fullResp.values ? fullResp.values : [];
+      const headerRow = rows[0] || [];
+      headers = Array.from({ length: lastCol }, (_, c) => String(headerRow[c] || '').trim());
+      
+      const rawValues = rows.slice(1);
+      const numRows = Math.max(0, lastRow - 1);
       values = Array.from({ length: numRows }, (_, r) => {
         const row = rawValues[r] || [];
         if (row.length >= headers.length) return row;
         return row.concat(Array(headers.length - row.length).fill(''));
       });
     } catch (sheetApiErr) {
-      Logger.log('getMainData_ data read fallback to getValues: ' + (sheetApiErr && sheetApiErr.message ? sheetApiErr.message : sheetApiErr));
-      values = sh.getRange(startRow, 1, numRows, headers.length).getValues();
+      Logger.log('getMainData_ full read fallback to getValues: ' + (sheetApiErr && sheetApiErr.message ? sheetApiErr.message : sheetApiErr));
+      headers = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h || '').trim());
+      const numRows = Math.max(0, lastRow - 1);
+      if (numRows > 0) {
+        values = sh.getRange(2, 1, numRows, headers.length).getValues();
+      }
     }
+    const idx = headerIndex_(headers);
     const sheetReadTime = Date.now() - sheetReadStart;
     Logger.log('[Timing] Read Sheets (Data): ' + sheetReadTime + ' ms');
     
@@ -4863,6 +4849,13 @@ function cacheDelete_(key){
 function clearInitialCache_() {
   cacheDeleteLarge_(INITIAL_DATA_CACHE_KEY);
   Logger.log('CACHE CLEAR key=' + INITIAL_DATA_CACHE_KEY);
+  // อุ่นแคชทันทีหลังลบ เพื่อให้คิวถัดไปเปิดเว็บได้รวดเร็วแบบ Cache Hit
+  try {
+    getMainData_({ forceRefresh: true });
+    Logger.log('CACHE REBUILT key=' + INITIAL_DATA_CACHE_KEY + ' successfully');
+  } catch (e) {
+    Logger.log('Failed to rebuild cache in clearInitialCache_: ' + e.message);
+  }
   return true;
 }
 
@@ -4874,6 +4867,11 @@ function clearInitialCache() {
     Logger.log('clearInitialCache error: ' + (e && e.stack ? e.stack : e));
     return { ok: false, error: (e && e.message) ? e.message : String(e) };
   }
+}
+
+function keepWebAppWarm() {
+  Logger.log('Keep-warm trigger executed.');
+  ping();
 }
 
 function cacheDelete(key) {
