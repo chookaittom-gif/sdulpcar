@@ -513,6 +513,7 @@ function getMainData_(options) {
 
     const buildBookingsStart = Date.now();
     const seen = new Set(); 
+    const startRow = 2; // Data rows start at row 2 (row 1 is header)
     const recentBookingsData = values.map((row, i) => {
       const id = String(row[idx.bookingId] || '').trim();
       if (!id || seen.has(id)) return null;
