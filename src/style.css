@@ -4579,16 +4579,17 @@ footer.footer .developer {
 
 /* 🍓 BERRY FIX: เคลียร์ Media Queries เก่าที่ Hardcode px ทิ้ง ให้ Flexbox จัดการเองแบบ Fluid */
 @media (max-width:768px){
+  #radar-drawer{ width:100vw; max-width:100vw; }
   .radar-header{ padding:16px 14px 12px; }
   .radar-header h3{ font-size:1.2rem; }
   #radar-content{ padding:12px 12px calc(env(safe-area-inset-bottom, 12px) + 70px); }
-  .radar-item{ padding:11px 11px; gap:10px; }
-  .radar-name{ font-size:.96rem; }
+  .radar-item{ padding:11px 11px; gap:10px; flex-wrap: wrap; }
+  .radar-name{ font-size:.96rem; white-space: normal; word-break: break-word; }
+  .radar-subtext{ white-space: normal; word-break: break-word; }
   .radar-meta{ font-size: .8rem; padding: 3px 8px; }
 }
 
 @media (max-width:576px){
-  #radar-drawer{ width:100vw; max-width:100vw; }
   .radar-header{ padding:14px 12px 10px; }
   #radar-content{ padding:10px 10px calc(env(safe-area-inset-bottom, 10px) + 70px); }
   .radar-name{ font-size:.93rem; }
