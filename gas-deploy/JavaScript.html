@@ -6523,6 +6523,15 @@ function wireVehicleCountAutoClampOnce() {
   };
 })();
     
+// Check session timeout periodically every 60 seconds
+setInterval(() => {
+    try {
+        if (typeof checkSessionTimeout === 'function') {
+            checkSessionTimeout();
+        }
+    } catch (e) {}
+}, 60000);
+
 /* ANCHOR: SESSION MANAGER (6 Hours Timeout) */
 function checkSessionTimeout() {
     const sessionTimeoutMs = 6 * 60 * 60 * 1000;
