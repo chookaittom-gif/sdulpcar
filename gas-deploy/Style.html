@@ -4580,19 +4580,25 @@ footer.footer .developer {
 
 /* 🍓 BERRY FIX: เคลียร์ Media Queries เก่าที่ Hardcode px ทิ้ง ให้ Flexbox จัดการเองแบบ Fluid */
 @media (max-width:768px){
-  #radar-drawer{ width:100vw; max-width:100vw; }
+  /* BUGFIX: width เต็ม viewport + ห้าม horizontal overflow */
+  #radar-drawer{ width:100vw; max-width:100vw; overflow-x:hidden; }
   .radar-header{ padding:16px 14px 12px; }
   .radar-header h3{ font-size:1.2rem; }
-  #radar-content{ padding:12px 12px calc(env(safe-area-inset-bottom, 12px) + 70px); }
-  .radar-item{ padding:11px 11px; gap:10px; flex-wrap: wrap; }
-  .radar-name{ font-size:.96rem; white-space: normal; word-break: break-word; }
-  .radar-subtext{ white-space: normal; word-break: break-word; }
-  .radar-meta{ font-size: .8rem; padding: 3px 8px; }
+  /* BUGFIX: เพิ่ม padding-bottom ให้ item สุดท้าย scroll พ้นขอบ viewport ได้ */
+  #radar-content{ padding:12px 12px calc(env(safe-area-inset-bottom, 20px) + 32px); }
+  /* BUGFIX: ห้าม item แตก horizontal / text ล้น */
+  .radar-list{ width:100%; min-width:0; }
+  .radar-item{ padding:11px 11px; gap:10px; flex-wrap:wrap; min-width:0; box-sizing:border-box; width:100%; }
+  .radar-item-left{ min-width:0; }
+  .radar-name{ font-size:.96rem; white-space:normal; word-break:break-word; overflow:visible; text-overflow:unset; }
+  .radar-subtext{ white-space:normal; word-break:break-word; overflow:visible; text-overflow:unset; }
+  .radar-meta{ font-size:.8rem; padding:3px 8px; }
 }
 
 @media (max-width:576px){
   .radar-header{ padding:14px 12px 10px; }
-  #radar-content{ padding:10px 10px calc(env(safe-area-inset-bottom, 10px) + 70px); }
+  /* BUGFIX: สอดคล้องกับ 768px — ยังคง safe-area+32px */
+  #radar-content{ padding:10px 10px calc(env(safe-area-inset-bottom, 20px) + 32px); }
   .radar-name{ font-size:.93rem; }
   .radar-meta{ font-size:.85rem; }
   .radar-subtext{ font-size:.75rem; }

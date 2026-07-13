@@ -1240,8 +1240,8 @@ function getTelegramConfig() {
     ? getSettingMap()
     : (typeof getSettingMap_ === 'function' ? getSettingMap_() : {});
 
-  var token = String(map['Telegram Bot Token'] || '').trim();
-  var chatId = String(map['Telegram Chat Id'] || '').trim();
+  var token = String(map['Telegram Bot Token'] || map['Telegram Token'] || map['TELEGRAM_TOKEN'] || '').trim();
+  var chatId = String(map['Telegram Chat Id'] || map['Telegram Chat ID'] || map['TELEGRAM_CHAT_ID'] || '').trim();
 
   if (!token || !chatId) {
     try {
@@ -2385,7 +2385,7 @@ function buildBookingStatusMessage(rowObj, statusKey, reasonFromPayload) {
     return Math.max(plates.length, drivers.length);
   }
 
-  function buildAssignments_(plateRaw, driverRaw, titleLine, vehicleTypeRaw) {
+  function buildAssignments(plateRaw, driverRaw, titleLine, vehicleTypeRaw) {
     var plates = splitMultiValue_(plateRaw);
     var drivers = splitMultiValue_(driverRaw);
     var maxLen = Math.max(plates.length, drivers.length);
@@ -2415,8 +2415,8 @@ function buildBookingStatusMessage(rowObj, statusKey, reasonFromPayload) {
     ];
 
     for (var i = 0; i < maxLen; i++) {
-      var car = plates[i] || 'รอระบุทะเบียน';
-      var drv = drivers[i] || 'รอระบุชื่อ';
+      var car = escapeHtml(plates[i] || 'รอระบุทะเบียน');
+      var drv = escapeHtml(drivers[i] || 'รอระบุชื่อ');
       out.push((i + 1) + ') ' + vehicleIcon + ' ' + car + ' | 👤 ' + drv);
     }
     return out;
@@ -2427,13 +2427,13 @@ function buildBookingStatusMessage(rowObj, statusKey, reasonFromPayload) {
     return null;
   }
 
-  var id = cleanText(getV(['Booking ID', 'id', 'bookingId']), '-');
-  var name = cleanText(getV(['ชื่อ-สกุล', 'name', 'ผู้จอง']), 'ไม่ระบุ');
-  var position = cleanText(getV(['ตำแหน่ง', 'position']), '');
-  var phone = cleanText(getV(['เบอร์โทร', 'เบอร์โทรศัพท์', 'phone']), '');
-  var workType = cleanText(getV(['ประเภทงาน', 'workType', 'jobType']), '');
-  var workName = cleanText(getV(['งาน/โครงการ', 'ชื่อโครงการ/งาน', 'workName', 'projectName', 'project']), 'ไม่ระบุ');
-  var place = cleanText(getV(['สถานที่', 'destination', 'place']), 'ไม่ระบุ');
+  var id = escapeHtml(cleanText(getV(['Booking ID', 'id', 'bookingId']), '-'));
+  var name = escapeHtml(cleanText(getV(['ชื่อ-สกุล', 'name', 'ผู้จอง']), 'ไม่ระบุ'));
+  var position = escapeHtml(cleanText(getV(['ตำแหน่ง', 'position']), ''));
+  var phone = escapeHtml(cleanText(getV(['เบอร์โทร', 'เบอร์โทรศัพท์', 'phone']), ''));
+  var workType = escapeHtml(cleanText(getV(['ประเภทงาน', 'workType', 'jobType']), ''));
+  var workName = escapeHtml(cleanText(getV(['งาน/โครงการ', 'ชื่อโครงการ/งาน', 'workName', 'projectName', 'project']), 'ไม่ระบุ'));
+  var place = escapeHtml(cleanText(getV(['สถานที่', 'destination', 'place']), 'ไม่ระบุ'));
 
   var sDateRaw = getV(['วันเริ่มต้น', 'startDate']);
   var eDateRaw = getV(['วันสิ้นสุด', 'endDate']);
@@ -2457,20 +2457,20 @@ function buildBookingStatusMessage(rowObj, statusKey, reasonFromPayload) {
   var isCrossDay = !!(isoStart && isoEnd && isoStart !== isoEnd);
 
   var actualEndRaw = getV(['actualEndAt', 'actualEndTime', 'Actual End', 'เวลาปิดงานจริง']);
-  var actualEndText = cleanText(fmtThaiDateTimeSafe_(actualEndRaw), '');
-  var closedBy = cleanText(getV(['closedBy', 'ผู้ปิดงาน']), '');
+  var actualEndText = escapeHtml(cleanText(fmtThaiDateTimeSafe_(actualEndRaw), ''));
+  var closedBy = escapeHtml(cleanText(getV(['closedBy', 'ผู้ปิดงาน']), ''));
 
   var plate = getV(['เลขทะเบียนรถ', 'vehicle', 'plate']);
   var driver = getV(['พนักงานขับรถ', 'driver']);
-  var pax = cleanText(getV(['จำนวนผู้ร่วมเดินทาง', 'passengers']), '0');
+  var pax = escapeHtml(cleanText(getV(['จำนวนผู้ร่วมเดินทาง', 'passengers']), '0'));
   var rawCarType = cleanText(getV(['ประเภทรถ', 'carType', 'vehicleType']), '');
   var carType = (typeof normalizeVehicleTypeLabel_ === 'function')
     ? normalizeVehicleTypeLabel_(rawCarType)
     : rawCarType;
-  carType = cleanText(carType, 'ไม่ระบุ');
-  var vCount = cleanText(getV(['จำนวนรถที่ต้องการ', 'vehicleCount', 'carCount']), '1');
+  carType = escapeHtml(cleanText(carType, 'ไม่ระบุ'));
+  var vCount = escapeHtml(cleanText(getV(['จำนวนรถที่ต้องการ', 'vehicleCount', 'carCount']), '1'));
   var assignedCount = getAssignedCount_(plate, driver);
-  var phoneDisplay = formatPhoneDisplay_(phone);
+  var phoneDisplay = escapeHtml(formatPhoneDisplay_(phone));
 
   var userDisplay = name;
   if (position) userDisplay += ' (' + position + ')';
@@ -2550,7 +2550,7 @@ function buildBookingStatusMessage(rowObj, statusKey, reasonFromPayload) {
     var assignmentTitle = (eventKey === 'reassign_vehicle_driver')
       ? '🔄 <b>อัปเดตการมอบหมายใหม่</b>'
       : '✅ <b>มอบหมายยานพาหนะ</b>';
-    lines = lines.concat(buildAssignments_(plate, driver, assignmentTitle, carType));
+    lines = lines.concat(buildAssignments(plate, driver, assignmentTitle, carType));
 
     if (assignedCount > 0 && String(vCount) !== String(assignedCount)) {
       lines.push('ℹ️ สรุป: ขอ ' + vCount + ' คัน | จัดให้ ' + assignedCount + ' คัน');
@@ -2576,7 +2576,7 @@ function buildBookingStatusMessage(rowObj, statusKey, reasonFromPayload) {
   } else {
     note = rawNote || cleanText(getV(['Reason', 'reason']), '') || cleanText(getV(['CancelReason', 'cancelReason']), '');
   }
-  note = cleanText(note, '');
+  note = escapeHtml(cleanText(note, ''));
   var noteLine = '';
 
   if (eventKey === 'special_approve') {
@@ -8552,11 +8552,11 @@ function apiUpdateBookingStatus(payload) {
       Logger.log('[apiUpdateBookingStatus] clear BookingActualEnd error: ' + eActual);
     }
 
-    // 🍓 BERRY FIX: clear cache ให้หน้าบ้านดึงข้อมูลสถานะล่าสุดเสมอ
-    try { clearInitialCache_(); } catch (eCache) {}
-
     // ให้แน่ใจว่าค่าถูกเขียนแล้วก่อนอ่านกลับ
     _sheetApiUpdateValues_(sheet, rowIndex, 1, [oldRowVals], { label: 'apiUpdateBookingStatus row update' });
+
+    // 🍓 BERRY FIX: clear cache ให้หน้าบ้านดึงข้อมูลสถานะล่าสุดเสมอ
+    try { clearInitialCache_(); } catch (eCache) {}
 
     // 4) Refresh rowObj for notify + return
     var freshRowVals = oldRowVals.slice();
@@ -8957,8 +8957,8 @@ function sendTelegramNotify(payload, testMode) {
 
   if (testMode === 'send_test') {
     var map = (typeof getSettingMap_ === 'function') ? getSettingMap_() : {};
-    token = map['Telegram Bot Test Token ID'] || token;
-    chatId = map['Telegram Test Chat ID'] || chatId;
+    token = map['Telegram Bot Test Token ID'] || map['Telegram Bot Test Token'] || token;
+    chatId = map['Telegram Test Chat ID'] || map['Telegram Test Chat Id'] || chatId;
   }
 
   if (!token || !chatId) {

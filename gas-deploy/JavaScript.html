@@ -6377,7 +6377,14 @@ function wireVehicleCountAutoClampOnce() {
 }
 
     
+    const LOGIN_SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+    let loginSessionTimeoutId = null;
+
     function handleLogout(isForced) {
+        if (loginSessionTimeoutId) {
+            clearTimeout(loginSessionTimeoutId);
+            loginSessionTimeoutId = null;
+        }
         localStorage.removeItem('vb_current_user');
         localStorage.removeItem('vb_login_ts');
         currentUser = { isLoggedIn: false, role: 'Guest' };
@@ -6492,17 +6499,24 @@ function wireVehicleCountAutoClampOnce() {
         throw new Error('โครงสร้างข้อมูลผู้ใช้ไม่ถูกต้อง');
       }
 
-      G.currentUser = user;
+      const loginAt = Date.now();
+      const loginSession = Object.assign({}, user, {
+        loginAt: loginAt,
+        expiresAt: loginAt + LOGIN_SESSION_TTL_MS
+      });
+
+      G.currentUser = loginSession;
 
       try { 
-        localStorage.setItem('vb_current_user', JSON.stringify(user)); 
-        localStorage.setItem('vb_login_ts', String(Date.now())); 
+        localStorage.setItem('vb_current_user', JSON.stringify(loginSession)); 
+        localStorage.setItem('vb_login_ts', String(loginAt)); 
       } catch(_){}
 
-      updateHeader(user);
+      scheduleLoginSessionAutoLogout(loginSession);
+      updateHeader(loginSession);
       refreshAfterLogin();
       closeLoginModal();
-      notify(`เมี๊ยว~ ยินดีต้อนรับค่ะ ${user.displayName || user.username}!`, 'success');
+      notify(`เมี๊ยว~ ยินดีต้อนรับค่ะ ${loginSession.displayName || loginSession.username}!`, 'success');
       
       try{ form.reset(); }catch(_){}
       return false;
@@ -6533,13 +6547,39 @@ setInterval(() => {
 }, 60000);
 
 /* ANCHOR: SESSION MANAGER (6 Hours Timeout) */
+function getLoginSessionExpiresAt(session) {
+    let localUser = session || null;
+    if (!localUser) {
+        try { localUser = JSON.parse(localStorage.getItem('vb_current_user')); } catch (e) {}
+    }
+
+    const storedExpiresAt = Number(localUser && localUser.expiresAt);
+    if (storedExpiresAt) return storedExpiresAt;
+
+    const lastLogin = Number(localStorage.getItem('vb_login_ts'));
+    return lastLogin ? lastLogin + LOGIN_SESSION_TTL_MS : 0;
+}
+
+function scheduleLoginSessionAutoLogout(session) {
+    if (loginSessionTimeoutId) {
+        clearTimeout(loginSessionTimeoutId);
+        loginSessionTimeoutId = null;
+    }
+
+    const expiresAt = getLoginSessionExpiresAt(session);
+    if (!expiresAt) return;
+
+    const remainingMs = Math.max(0, expiresAt - Date.now());
+    loginSessionTimeoutId = setTimeout(() => {
+        checkSessionTimeout();
+    }, remainingMs);
+}
+
 function checkSessionTimeout() {
-    const sessionTimeoutMs = 6 * 60 * 60 * 1000;
-    const lastLogin = localStorage.getItem('vb_login_ts');
+    const expiresAt = getLoginSessionExpiresAt();
     
-    if (lastLogin) {
-        const diff = Date.now() - Number(lastLogin);
-        if (diff > sessionTimeoutMs) {
+    if (expiresAt) {
+        if (Date.now() >= expiresAt) {
             console.warn('⏳ Session expired (> 6 hours). Logging out...');
             handleLogout(true);
             return false;
@@ -7789,6 +7829,7 @@ function initializeApp(options) {
         const serverLoggedIn = !!(serverUser && serverUser.isLoggedIn);
 
         if (!serverLoggedIn && localUser && typeof checkSessionTimeout === 'function' && checkSessionTimeout()) {
+          if (typeof scheduleLoginSessionAutoLogout === 'function') scheduleLoginSessionAutoLogout(localUser);
           currentUser = localUser;
         } else {
           currentUser = serverUser || { isLoggedIn: false, role: 'Guest' };
