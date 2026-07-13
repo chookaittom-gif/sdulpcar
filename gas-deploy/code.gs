@@ -748,7 +748,7 @@ function getMainData_(options) {
     };
     
     const cacheWriteStart = Date.now();
-    cachePutLarge_(CK, payload, 14400); 
+    cachePutLarge_(CK, payload, CACHE_SEC || 120); 
     const cacheWriteTime = Date.now() - cacheWriteStart;
     Logger.log('[Timing] Cache Write: ' + cacheWriteTime + ' ms');
     
@@ -4850,13 +4850,6 @@ function cacheDelete_(key){
 function clearInitialCache_() {
   cacheDeleteLarge_(INITIAL_DATA_CACHE_KEY);
   Logger.log('CACHE CLEAR key=' + INITIAL_DATA_CACHE_KEY);
-  // อุ่นแคชทันทีหลังลบ เพื่อให้คิวถัดไปเปิดเว็บได้รวดเร็วแบบ Cache Hit
-  try {
-    getMainData_({ forceRefresh: true });
-    Logger.log('CACHE REBUILT key=' + INITIAL_DATA_CACHE_KEY + ' successfully');
-  } catch (e) {
-    Logger.log('Failed to rebuild cache in clearInitialCache_: ' + e.message);
-  }
   return true;
 }
 
