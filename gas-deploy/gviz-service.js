@@ -1,4 +1,3 @@
-<script>
 /* ===== GViz Service Layer (Read/Search Only) ===== */
 (function(global) {
   'use strict';
@@ -254,5 +253,3 @@
   };
 
 })(window);
-
-</script>
