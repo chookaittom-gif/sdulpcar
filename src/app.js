@@ -3396,6 +3396,33 @@ function syncAllThaiDateInputs() {
   });
 }
 
+function validateBookingTime() {
+  const startDateInput = document.getElementById('booking-date');
+  const endDateInput = document.getElementById('return-date');
+  const startTimeInput = document.getElementById('booking-start');
+  const endTimeInput = document.getElementById('booking-end');
+
+  if (!startDateInput || !endDateInput || !startTimeInput || !endTimeInput) return;
+
+  const startDateIso = startDateInput.dataset.iso || startDateInput.value || '';
+  const endDateIso = endDateInput.dataset.iso || endDateInput.value || '';
+  const startTimeVal = startTimeInput.value || '';
+  const endTimeVal = endTimeInput.value || '';
+
+  if (startDateIso && endDateIso && startDateIso === endDateIso && startTimeVal && endTimeVal) {
+    if (endTimeVal <= startTimeVal) {
+      if (typeof showToast === 'function') {
+        showToast('เวลา "กลับ" ต้องมากกว่าเวลา "ไป" (สำหรับการเดินทางวันเดียวกัน)', 'error');
+      }
+      endTimeInput.value = '';
+      endTimeInput.classList.add('is-invalid');
+      setTimeout(() => {
+        endTimeInput.classList.remove('is-invalid');
+      }, 1000);
+    }
+  }
+}
+
 function wireAvailabilityListeners() {
   if (window.__vbAvailabilityWired) return;
   window.__vbAvailabilityWired = true;
@@ -3406,6 +3433,7 @@ function wireAvailabilityListeners() {
     if (!el) return;
 
     el.addEventListener('change', () => {
+      validateBookingTime();
       if (window.__vbAvailabilityTimer) clearTimeout(window.__vbAvailabilityTimer);
       window.__vbAvailabilityTimer = setTimeout(() => {
         if (typeof loadAvailableVehicles === 'function') loadAvailableVehicles(false);
