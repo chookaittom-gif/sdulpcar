@@ -167,8 +167,9 @@
         return Promise.reject(new Error('Unknown action: ' + action + '. Supported actions: ' + Object.keys(API_ACTIONS).sort().join(', ')));
       }
 
+      var isStandalone = (typeof google === 'undefined' || !google.script || !google.script.run);
       var webAppUrl = normalizeUrl(cfg.webAppUrl);
-      if (!webAppUrl || webAppUrl === 'PASTE_APPS_SCRIPT_WEB_APP_URL_HERE') {
+      if (!isStandalone && (!webAppUrl || webAppUrl === 'PASTE_APPS_SCRIPT_WEB_APP_URL_HERE')) {
         return Promise.reject(new Error('APP_CONFIG.webAppUrl is not configured'));
       }
 
@@ -180,16 +181,16 @@
 
       var pending = new Promise(function(resolve, reject) {
         queue.push(function() {
-          var useGet = isReadAction(action);
-          var requestUrl = useGet ? buildGetUrl(webAppUrl, action, payload) : webAppUrl;
+          var useGet = !isStandalone && isReadAction(action);
+          var requestUrl = isStandalone ? '/api/gas' : (useGet ? buildGetUrl(webAppUrl, action, payload) : webAppUrl);
           var baseFetchOptions = {
-            method: useGet ? 'GET' : 'POST',
+            method: (isStandalone || !useGet) ? 'POST' : 'GET',
             mode: 'cors',
             redirect: 'follow',
             credentials: 'omit'
           };
 
-          if (!useGet) {
+          if (isStandalone || !useGet) {
             baseFetchOptions.headers = {
               'Content-Type': 'text/plain;charset=utf-8'
             };
