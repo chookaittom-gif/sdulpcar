@@ -120,6 +120,13 @@
     return !!(err && (err.statusCode === 404 || String(err.message || err).indexOf('HTTP 404') > -1));
   }
 
+  // Proxy returns 5xx when Apps Script answers with an HTML error page instead of JSON.
+  function isHttp5xxError(err) {
+    if (!err) return false;
+    if (Number(err.statusCode) >= 500 && Number(err.statusCode) <= 599) return true;
+    return /HTTP 5\d\d/.test(String(err.message || err));
+  }
+
   function sleepMs(ms) {
     return new Promise(function(resolve) {
       setTimeout(resolve, ms);
@@ -131,6 +138,16 @@
     return !!(err && err.name === 'AbortError') ||
       msg.indexOf('AbortError') > -1 ||
       msg.indexOf('signal is aborted') > -1;
+  }
+
+  function isNetworkError(err) {
+    if (isAbortLikeError(err)) return false;
+    var msg = String(err && err.message ? err.message : err || '');
+    return !!(err && err.name === 'TypeError') ||
+      msg.indexOf('Failed to fetch') > -1 ||
+      msg.indexOf('NetworkError') > -1 ||
+      msg.indexOf('Load failed') > -1 ||
+      msg.indexOf('ERR_CONNECTION') > -1;
   }
 
   function createFriendlyAbortError() {
@@ -248,18 +265,20 @@
 
           var attempts = 0;
           var maxAttempts = shouldRetryOnce(action) ? 2 : 1;
-          var http404RetryDelays = [1500, 3000, 5000];
+          var initialDataRetryDelays = [1500, 3000, 5000];
 
           function executeWithRetry() {
             attempts++;
             return runFetchAttempt().catch(function(err) {
-              if (isInitialDataAction(action) && isHttp404Error(err) && attempts <= http404RetryDelays.length) {
+              var isRetryableTransport = isHttp404Error(err) || isHttp5xxError(err) || isNetworkError(err);
+              if (isInitialDataAction(action) && isRetryableTransport && attempts <= initialDataRetryDelays.length) {
+                var retryReason = isHttp404Error(err) ? 'HTTP 404' : (isHttp5xxError(err) ? 'HTTP ' + (err.statusCode || '5xx') : 'network error');
                 global.vbInitState = 'RETRYING';
-                console.warn('RETRY getWebAppInitialData ' + attempts + '/3 after HTTP 404');
+                console.warn('RETRY getWebAppInitialData ' + attempts + '/3 after ' + retryReason);
                 try {
                   if (typeof global.showToast === 'function') global.showToast('กำลังลองโหลดข้อมูลอีกครั้ง...', 'info');
                 } catch (_) {}
-                return sleepMs(http404RetryDelays[attempts - 1]).then(executeWithRetry);
+                return sleepMs(initialDataRetryDelays[attempts - 1]).then(executeWithRetry);
               }
               if (isAbortLikeError(err)) {
                 if (attempts < maxAttempts) return executeWithRetry();

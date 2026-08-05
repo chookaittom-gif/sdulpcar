@@ -7757,6 +7757,7 @@ function initializeApp(options) {
     if (!error && !response) return 'empty response';
     if (response && (response.cancelled || response.benign)) return 'Apps Script response interrupted';
     if (message.indexOf('http 404') > -1 || message.indexOf('404') > -1) return 'HTTP 404';
+    if (/http 5\d\d/.test(message) || message.indexOf('invalid json response') > -1) return 'server error';
     if (message.indexOf('timeout') > -1 || message.indexOf('timed out') > -1) return 'timeout';
     if (message.indexOf('abort') > -1 || message.indexOf('aborted') > -1) return 'timeout';
     if (message.indexOf('failed to fetch') > -1 || message.indexOf('network') > -1) return 'network error';
