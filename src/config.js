@@ -233,7 +233,8 @@
 
                 var data = Object.prototype.hasOwnProperty.call(json, 'data') ? json.data : json;
                 if (action === 'getWebAppInitialData') {
-                  if (!data || !data.bookings || !data.vehicles || !data.drivers || !data.projects) {
+                  var payload = (data && data.data) ? data.data : data;
+                  if (!payload || !payload.bookings || !payload.vehicles || !payload.drivers || !payload.projects) {
                     throw new Error('Partial initial data response from server');
                   }
                 }
