@@ -2032,24 +2032,8 @@ async function submitSplitBookings(basePayload, selectedTypes, serverFnName) {
 
 /* ================== submitBooking (IMPROVED) ================== */
 async function submitBooking(event) {
-  if (event && typeof event.preventDefault === 'function') event.preventDefault();
-
-  const form = (event && event.target && event.target.id === 'booking-form')
-    ? event.target
-    : document.getElementById('booking-form');
-  const submitBtn = (event && event.submitter)
-    || document.querySelector('button[form="booking-form"]')
-    || document.getElementById('new-booking-btn');
-
-  if (!form) {
-    showToast('ไม่พบแบบฟอร์มการจอง', 'error');
-    return;
-  }
-
-  if (typeof form.checkValidity === 'function' && !form.checkValidity()) {
-    if (typeof form.reportValidity === 'function') form.reportValidity();
-    return;
-  }
+  const form = document.getElementById('booking-form');
+  const submitBtn = document.querySelector('button[form="booking-form"]') || document.getElementById('new-booking-btn');
 
   setBtnLoading(submitBtn, true);
 
@@ -2073,10 +2057,6 @@ async function submitBooking(event) {
     }
 
     const payload = prepareBookingPayload(form);
-    if (!payload || !payload.carType || payload.carType === '' || payload.carType === 'ไม่ระบุ') {
-      showToast('😿 กรุณาเลือก "ประเภทรถ" ก่อนนะคะ', 'error');
-      return;
-    }
 
     // Keep: Multi-type selection logic
     let selectedVehicles = [];
@@ -3443,6 +3423,25 @@ function validateBookingTime() {
   }
 }
 
+function wireAvailabilityListeners() {
+  if (window.__vbAvailabilityWired) return;
+  window.__vbAvailabilityWired = true;
+
+  const ids = ['booking-date', 'booking-start', 'booking-end', 'return-date'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    el.addEventListener('change', () => {
+      validateBookingTime();
+      if (window.__vbAvailabilityTimer) clearTimeout(window.__vbAvailabilityTimer);
+      window.__vbAvailabilityTimer = setTimeout(() => {
+        if (typeof loadAvailableVehicles === 'function') loadAvailableVehicles(false);
+      }, 120);
+    });
+  });
+}
+
 function wireBookingFormSubmit() {
   const form = document.getElementById('booking-form');
   if (!form || form.dataset.vbwired) return;
@@ -3757,6 +3756,36 @@ function getResourceBlockRenderMeta(row) {
     const assignedDriver = String(row?.assignedDriver || '').trim();
     const driverName = String(row?.name || row?.driver || assignedDriver || '').trim();
     const plateText = String(row?.plate || row?.vehicle || row?.name || '').trim();
+
+    if (statusKey === 'driver_block') {
+        return {
+            typeText: 'ลาพนักงานขับรถ',
+            chipText: 'ลา',
+            primaryText: driverName || 'ไม่ระบุพนักงานขับรถ',
+            secondaryText: reasonText || 'บล็อกการลา'
+        };
+    }
+
+    return {
+        typeText: 'นำรถไปซ่อม',
+        chipText: 'ซ่อม',
+        primaryText: plateText || 'ไม่ระบุทะเบียนรถ',
+        secondaryText: assignedDriver ? ('ผู้นำรถไปซ่อม: ' + assignedDriver) : (reasonText || 'บล็อกรถซ่อม')
+    };
+}
+
+function getResourceBlockRenderMeta(row) {
+    const statusKey = String(
+        typeof normalizeClientStatus === 'function'
+            ? normalizeClientStatus(row?.status || 'pending')
+            : (row?.status || 'pending')
+    ).trim().toLowerCase();
+    if (statusKey !== 'driver_block' && statusKey !== 'vehicle_block') return null;
+
+    const reasonText = String(row?.reason || row?.workName || row?.project || row?.purpose || '').trim();
+    const assignedDriver = String(row?.assignedDriver || '').trim();
+    const driverName = String(row?.name || row?.driver || assignedDriver || '').trim();
+    const plateText = String(row?.plate || row?.vehicle || row?.name || '').trim();
     const reasonLc = reasonText.toLowerCase();
     const isDriverLeave = statusKey === 'driver_block' && (reasonLc.includes('ลา') || reasonLc.includes('พัก'));
     const isVehicleRepair = statusKey === 'vehicle_block' && (reasonLc.includes('ซ่อม') || reasonLc.includes('repair') || reasonLc.includes('maintenance'));
@@ -3774,11 +3803,21 @@ function getResourceBlockRenderMeta(row) {
 }
 
 function renderCalendar(year, month) {
+    let isFirstRender = false;
+    if (window.__isFirstCalendarRender !== false) {
+        window.__isFirstCalendarRender = false;
+        isFirstRender = true;
+        performance.mark('calendar-render-start');
+    }
+
     // 🍓 BERRY FIX: ระบบป้องกันการ Render ซ้ำซ้อน (Throttle Lock 50ms)
     const renderKey = `${year}-${month}`;
     const nowMs = Date.now();
     if (renderCalendar.__lastRun && renderCalendar.__lastKey === renderKey && (nowMs - renderCalendar.__lastRun < 50)) {
         console.log('⚡ [Calendar] Skipped redundant render (Throttle Lock)');
+        if (isFirstRender) {
+            window.__isFirstCalendarRender = true;
+        }
         return;
     }
     renderCalendar.__lastRun = nowMs;
@@ -4125,6 +4164,13 @@ function renderCalendar(year, month) {
         normalizeCalendarInteractiveState();
 
         console.log(`[Calendar] renderCalendar OK: ${month}/${year} events=${monthEvents.length}`);
+        if (isFirstRender) {
+            performance.mark('calendar-render-end');
+            performance.measure('calendar first render', 'calendar-render-start', 'calendar-render-end');
+            performance.mark('init-ready');
+            performance.measure('total time ถึง INIT_READY', 'init-start', 'init-ready');
+            logPerfMeasures_();
+        }
     });
 }
 
@@ -4238,9 +4284,7 @@ function renderCalendarKPI(opts = {}) {
     }
 
     all.forEach(el => {
-        const isMatch = key === 'blocks'
-            ? (el.classList.contains('status-driver_block') || el.classList.contains('status-vehicle_block'))
-            : el.classList.contains(`status-${key}`);
+        const isMatch = el.classList.contains(`status-${key}`);
         el.classList.toggle('dim', !isMatch);
     });
 }
@@ -4603,28 +4647,6 @@ function prepareBookingPayload(form) {
   if (purposeSelect) {
       payload.workType = purposeSelect.value;
   }
-
-  const otherWorkTypeInput = document.getElementById('form-purpose-other');
-  if (purposeSelect && String(purposeSelect.value || '').trim() === 'อื่นๆ') {
-    const customWorkType = otherWorkTypeInput
-      ? otherWorkTypeInput.value.trim()
-      : '';
-
-    if (!customWorkType) {
-      if (otherWorkTypeInput) {
-        otherWorkTypeInput.required = true;
-        if (typeof otherWorkTypeInput.reportValidity === 'function') {
-          otherWorkTypeInput.reportValidity();
-        }
-        if (typeof otherWorkTypeInput.focus === 'function') {
-          otherWorkTypeInput.focus();
-        }
-      }
-      throw new Error('กรุณาระบุประเภทงานอื่นๆ');
-    }
-
-    payload.workType = customWorkType;
-  }
   
   if (projectNameInput) {
       payload.workName = projectNameInput.value.trim();
@@ -4723,12 +4745,6 @@ function prepareBookingForm() {
     console.warn('prepareBookingForm populate error:', e);
   }
 
-  try {
-    setupBookingOtherWorkTypeField();
-  } catch (e) {
-    console.warn('setupBookingOtherWorkTypeField error:', e);
-  }
-
   // 4) Auto Focus
   try {
     const focusEl = modal ? modal.querySelector('[data-autofocus], input:not([type="hidden"]), select') : null;
@@ -4736,32 +4752,6 @@ function prepareBookingForm() {
       setTimeout(() => focusEl.focus(), 100);
     }
   } catch (e) {}
-}
-
-function setupBookingOtherWorkTypeField() {
-  const purposeSelect = document.getElementById('form-purpose');
-  const otherWrap = document.getElementById('form-purpose-other-wrap');
-  const otherInput = document.getElementById('form-purpose-other');
-  if (!purposeSelect || !otherWrap || !otherInput) return;
-
-  const sync = (shouldFocus) => {
-    const isOther = String(purposeSelect.value || '').trim() === 'อื่นๆ';
-    otherWrap.classList.toggle('hidden', !isOther);
-    otherInput.required = isOther;
-
-    if (!isOther) {
-      otherInput.value = '';
-    } else if (shouldFocus && typeof otherInput.focus === 'function') {
-      setTimeout(() => otherInput.focus(), 0);
-    }
-  };
-
-  if (purposeSelect.dataset.bookingOtherTypeWired !== 'true') {
-    purposeSelect.addEventListener('change', () => sync(true));
-    purposeSelect.dataset.bookingOtherTypeWired = 'true';
-  }
-
-  sync(false);
 }
 
 function ensureBookingFormHasSubmitButton_() {
@@ -7710,6 +7700,29 @@ function changeTimelineDate(deltaDays) {
 }
 
 
+window.SHOW_PERF_LOGS = true;
+function logPerfMeasures_() {
+  if (!window.SHOW_PERF_LOGS) return;
+  const measures = [
+    'GAS response time',
+    'JSON parse',
+    'assign initial data',
+    'reindex bookings',
+    'UI wiring',
+    'counters',
+    'calendar first render',
+    'total time ถึง INIT_READY'
+  ];
+  console.log('%c====== PERFORMANCE MEASUREMENTS (ms) ======', 'font-weight: bold; color: #1e3a8a;');
+  measures.forEach(name => {
+    const entries = performance.getEntriesByName(name);
+    if (entries.length > 0) {
+      console.log(`⏱️ %c${name}: %c${entries[entries.length - 1].duration.toFixed(2)} ms`, 'color: #475569;', 'font-weight: bold; color: #0f766e;');
+    }
+  });
+  console.log('%c============================================', 'font-weight: bold; color: #1e3a8a;');
+}
+
 function initializeApp(options) {
   const silentIfRunning = !!(options && options.silentIfRunning);
   if (window.vbInitState === 'READY') return Promise.resolve(true);
@@ -7797,6 +7810,8 @@ function initializeApp(options) {
   }
 
   window.vbInitPromise = (async () => {
+    performance.mark('init-start');
+    window.__isFirstCalendarRender = true;
     console.log('🚀 Initializing Vehicle Booking System (V-Berry Fix)...');
 
     try {
@@ -7863,16 +7878,22 @@ function initializeApp(options) {
       const toastEl = document.getElementById('vtoast');
       if (toastEl) toastEl.style.display = 'none';
 
+      performance.mark('assign-data-start');
       window.allBookingsData = (initData.data && initData.data.bookings) || [];
       window.vehiclesList    = (initData.data && initData.data.vehicles) || { vans: [], trucks: [], all: [] };
       window.driversList     = (initData.data && initData.data.drivers) || [];
       window.projectList     = (initData.data && initData.data.projects) || [];
+      performance.mark('assign-data-end');
+      performance.measure('assign initial data', 'assign-data-start', 'assign-data-end');
 
+      performance.mark('reindex-start');
       try {
         if (typeof reindexBookings === 'function') reindexBookings(window.allBookingsData);
       } catch (e) {
         console.warn('reindexBookings warning:', e);
       }
+      performance.mark('reindex-end');
+      performance.measure('reindex bookings', 'reindex-start', 'reindex-end');
 
       let localUser = null;
       try { localUser = JSON.parse(localStorage.getItem('vb_current_user')); } catch (e) {}
@@ -7894,13 +7915,20 @@ function initializeApp(options) {
 
       window.currentUser = currentUser;
 
+      performance.mark('ui-wiring-start');
       try { if (typeof updateHeaderUI === 'function') updateHeaderUI(currentUser); } catch (e) {}
       try { if (typeof initUiComponents === 'function') initUiComponents(); } catch (e) { console.warn('initUiComponents warning:', e); }
       try { if (typeof openInitialTab === 'function') openInitialTab(); } catch (e) {}
+      performance.mark('ui-wiring-end');
+      performance.measure('UI wiring', 'ui-wiring-start', 'ui-wiring-end');
+
+      performance.mark('counters-start');
       try { if (typeof updateCounters === 'function') updateCounters(); } catch (e) {}
       try { if (typeof syncReturnDateWithStartDate === 'function') syncReturnDateWithStartDate(); } catch (e) {}
       try { if (typeof installSelfTestFloatingButton === 'function') installSelfTestFloatingButton(); } catch (e) {}
       try { if (typeof wireVehicleCountAutoClampOnce === 'function') wireVehicleCountAutoClampOnce(); } catch (e) {}
+      performance.mark('counters-end');
+      performance.measure('counters', 'counters-start', 'counters-end');
 
       window.vbInitState = 'READY';
       window.isAppInitialized = true;
@@ -7908,7 +7936,9 @@ function initializeApp(options) {
       console.log('✅ Application initialized successfully!');
 
       try {
-        if (typeof renderCalendar === 'function' && window.calendarState) {
+        if (typeof window.__berryScheduleCalendarResize__ === 'function') {
+          window.__berryScheduleCalendarResize__('init_ready');
+        } else if (typeof renderCalendar === 'function' && window.calendarState) {
           renderCalendar(window.calendarState.currentYear, window.calendarState.currentMonth);
         }
       } catch (e) {
@@ -8169,6 +8199,104 @@ window.toggleDailySummary = function() {
 };
 
 window.__BOOKINGS_FILTERED_CACHE__ = window.__BOOKINGS_FILTERED_CACHE__ || [];
+
+window.loadBookingsView = function() {
+  console.log("🚀 [V-Berry] Loading Bookings View with Status Grouping Fix...");
+
+  const tbody = document.getElementById('bookings-table-body');
+  const summaryBody = document.getElementById('daily-summary-tbody');
+
+  if (tbody) tbody.innerHTML = (typeof getSkeletonRows === 'function') ? getSkeletonRows(7, 5) : '<tr><td colspan="7">Loading...</td></tr>';
+  if (summaryBody) summaryBody.innerHTML = (typeof getSkeletonRows === 'function') ? getSkeletonRows(6, 3) : '<tr><td colspan="6">Loading...</td></tr>';
+
+  setTimeout(() => {
+    try {
+      const allData = (window.allBookingsData || []).filter(b => {
+        const bId = String(b.bookingId || b.id || '');
+        return !bId.startsWith('BLK-');
+      });
+
+      if (document.getElementById('total-bookings-badge')) {
+        document.getElementById('total-bookings-badge').textContent = allData.length;
+      }
+
+      const today = new Date();
+      const todayISO = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+
+      const todayBookings = allData.filter(b => {
+        const s = normalizeClientStatus(b.status || 'pending');
+        const allowedDaily = ['approved', 'pending', 'driver_special_approved'];
+        if (allowedDaily.indexOf(s) === -1) return false;
+
+        const start = b.startDate || '';
+        const end = b.endDate || start;
+        return todayISO >= start && todayISO <= end;
+      });
+
+      if (typeof renderBookingsTable === 'function') {
+        renderBookingsTable(todayBookings, 'daily-summary-tbody', 'daily');
+      }
+
+      let filteredData = allData;
+
+      const includeBlocks = document.getElementById('chk-include-blocks') ? document.getElementById('chk-include-blocks').checked : false;
+      if (!includeBlocks && window.bookingsCurrentFilter !== 'blocks') {
+        filteredData = filteredData.filter(b => {
+          const s = normalizeClientStatus(b.status || 'pending');
+          return s !== 'driver_block' && s !== 'vehicle_block' && s !== 'maintenance';
+        });
+      }
+
+      if (typeof window.filterBookingsByDateRange === 'function') {
+        filteredData = window.filterBookingsByDateRange(filteredData);
+      }
+
+      if (window.bookingsCurrentFilter) {
+        filteredData = filteredData.filter(b => {
+          const s = normalizeClientStatus(b.status || 'pending');
+
+          if (window.bookingsCurrentFilter === 'approved') {
+            return s === 'approved' || s === 'driver_special_approved';
+          }
+          if (window.bookingsCurrentFilter === 'blocks') {
+            return s === 'driver_block' || s === 'vehicle_block' || s === 'maintenance';
+          }
+
+          return s === window.bookingsCurrentFilter;
+        });
+      }
+
+      window.__BOOKINGS_FILTERED_CACHE__ = filteredData.slice();
+
+      const totalItems = filteredData.length;
+      const totalPages = Math.max(1, Math.ceil(totalItems / BOOKINGS_PAGE_SIZE));
+
+      if (bookingsCurrentPage > totalPages) bookingsCurrentPage = totalPages;
+      if (bookingsCurrentPage < 1) bookingsCurrentPage = 1;
+
+      const startIndex = (bookingsCurrentPage - 1) * BOOKINGS_PAGE_SIZE;
+      const pageData = filteredData.slice(startIndex, startIndex + BOOKINGS_PAGE_SIZE);
+
+      if (typeof renderBookingsTable === 'function') {
+        renderBookingsTable(pageData, 'bookings-table-body', 'full');
+      }
+
+      const bookingsTableCard = document.getElementById('bookings-table-card');
+      const bookingsFooter = document.getElementById('bookings-footer');
+
+      if (bookingsTableCard) bookingsTableCard.style.display = '';
+      if (bookingsFooter) bookingsFooter.style.display = (totalItems > 0) ? 'block' : 'none';
+
+      if (typeof renderBookingsPagination === 'function') {
+        renderBookingsPagination(totalPages, totalItems);
+      }
+
+    } catch (e) {
+      console.error("❌ loadBookingsView Error:", e);
+      if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">เกิดข้อผิดพลาด: ' + e.message + '</td></tr>';
+    }
+  }, 200);
+};
 
 function renderBookingsTable(bookings, tbodyId, type) {
   var tbody = document.getElementById(tbodyId);
@@ -9439,7 +9567,55 @@ function wireAvailabilityListeners() {
 
 
 
-async function submitCancelBooking(event) {
+/* ================== BOOKING LOGIC (UPDATED WITH LOADING) ================== */
+window.submitBooking = async function(event) {
+    event.preventDefault();
+    const form = event.target;
+    
+    console.log("📝 [Client] submitBooking initiated.");
+    let submitBtn = event.submitter || form.querySelector('button[type="submit"]');
+    if (!submitBtn && form.closest('.modal')) {
+        submitBtn = form.closest('.modal').querySelector('.modal-footer button[type="submit"]');
+    }
+    
+    if (!form.checkValidity()) {
+        console.warn("⚠️ [Client] Form validation failed.");
+        form.reportValidity();
+        return;
+    }
+
+    const payload = (typeof prepareBookingPayload === 'function') ? prepareBookingPayload(form) : {};
+    console.log("📦 [Client] Payload Prepared:", payload);
+
+    if (!payload.carType || payload.carType === '' || payload.carType === 'ไม่ระบุ') {
+        showToast('😿 กรุณาเลือก "ประเภทรถ" ก่อนนะคะ', 'error');
+        return;
+    }
+
+    setBtnLoading(submitBtn, true);
+
+    try {
+        const res = await googleScriptRun('createBookingAndBroadcast', payload);
+        console.log("📨 [Client] Server Response:", res);
+
+        if (!res || !res.ok) throw new Error(res.error || 'บันทึกไม่สำเร็จ');
+
+        showToast(`🎉 จองสำเร็จ! ID: ${res.id}`, 'success');
+        console.log("✅ [Client] Booking Success. ID:", res.id);
+        
+        closeBookingForm();
+        
+        await refreshBookingUiAfterMutation({ forceSync: true });
+        
+    } catch (err) {
+        console.error("❌ [Client] Error:", err);
+        showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+    } finally {
+        setBtnLoading(submitBtn, false);
+    }
+};
+
+window.submitCancelBooking = async function(event) {
     if(event) event.preventDefault();
     
     console.log("📝 [Client] submitCancelBooking initiated.");
@@ -9481,7 +9657,7 @@ async function submitCancelBooking(event) {
         if (typeof window.closeCancelForm === 'function') window.closeCancelForm();
         
         // 4. รีโหลดหน้า (ตาราง, ปฏิทิน, ตัวนับ)
-        await refreshBookingUiAfterMutation({ forceSync: true, reloadCounters: true });
+        await refreshBookingUiAfterMutation({ forceSync: true });
 
     } catch (err) {
         console.error("❌ [Client] Cancel Error:", err);
@@ -9520,8 +9696,92 @@ async function searchBookingsByPhoneWithFallback(phone) {
     return await runner('apiGetBookingsByPhone', phone);
 }
 
+/* [ANCHOR: Booking Search Logic for Cancellation] */
+async function handleSearchBookingId() {
+    const phoneInput = document.getElementById('cancel-phone');
+    const searchBtn = document.getElementById('btn-search-id');
+    const container = document.getElementById('booking-id-container');
+    const submitBtn = document.getElementById('btn-confirm-cancel');
+
+    if (!phoneInput || !phoneInput.value || phoneInput.value.length < 9) {
+        if(typeof showToast === 'function') showToast('กรุณากรอกเบอร์โทรศัพท์ให้ถูกต้องค่ะ 😿', 'warning');
+        phoneInput.focus();
+        return;
+    }
+
+    // UI Loading State
+    const originalText = searchBtn.innerHTML;
+    searchBtn.disabled = true;
+    searchBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span> ค้นหา...';
+    
+    try {
+        const res = await searchBookingsByPhoneWithFallback(phoneInput.value);
+        
+        if (!res.ok) {
+            throw new Error(res.error || 'ไม่สามารถค้นหาข้อมูลได้');
+        }
+
+        if (res.data && res.data.length > 0) {
+            // สร้าง Select Dropdown
+            let html = `<select id="cancel-bookingId" name="bookingId" class="form-control" required style="border-color:var(--success);">`;
+            html += `<option value="">-- พบ ${res.data.length} รายการ (ล่าสุด) --</option>`;
+            
+            res.data.forEach(item => {
+                html += `<option value="${item.bookingId}">ID: ${item.bookingId} | ${item.summary}</option>`;
+            });
+            html += `</select>`;
+            
+            container.innerHTML = html;
+            
+            // Enable Submit Button เมื่อมีการเลือก
+            const selectEl = document.getElementById('cancel-bookingId');
+            selectEl.addEventListener('change', function() {
+                if (this.value) {
+                    submitBtn.disabled = false;
+                    submitBtn.classList.remove('btn-secondary');
+                    submitBtn.classList.add('btn-danger');
+                } else {
+                    submitBtn.disabled = true;
+                }
+            });
+
+            if(typeof showToast === 'function') showToast(`พบข้อมูลการจอง ${res.data.length} รายการค่ะ 😽`, 'success');
+            
+        } else {
+            // กรณีไม่พบ
+            container.innerHTML = `<input type="text" id="cancel-bookingId" name="bookingId" value="" placeholder="ไม่พบรายการจองที่สามารถยกเลิกได้" readonly style="background-color: #fee2e2; border-color: #ef4444; color: #b91c1c;">`;
+            submitBtn.disabled = true;
+            if(typeof showToast === 'function') showToast('ไม่พบรายการจองที่สามารถยกเลิกได้ค่ะ (อาจยกเลิกไปแล้ว)', 'info');
+        }
+
+    } catch (e) {
+        console.error(e);
+        if(typeof showToast === 'function') showToast('เกิดข้อผิดพลาด: ' + e.message, 'error');
+    } finally {
+        searchBtn.disabled = false;
+        searchBtn.innerHTML = originalText;
+    }
+}
+
 // อัปเดต closeCancelForm เพื่อรีเซ็ตค่าต่างๆ
 window.closeCancelForm_Old = window.closeCancelForm; // เก็บตัวเก่าไว้ถ้ามี
+window.closeCancelForm = function() {
+    if(typeof closeModalA11y === 'function') closeModalA11y('cancel-modal');
+    
+    // Reset Form State
+    setTimeout(() => {
+        const form = document.getElementById('cancel-form');
+        if(form) form.reset();
+        
+        const container = document.getElementById('booking-id-container');
+        if(container) {
+            container.innerHTML = `<input type="text" id="cancel-bookingId" name="bookingId" required placeholder="กรุณากดค้นหาจากเบอร์โทร..." readonly style="background-color: #f3f4f6; cursor: not-allowed;">`;
+        }
+        
+        const submitBtn = document.getElementById('btn-confirm-cancel');
+        if(submitBtn) submitBtn.disabled = true;
+    }, 300);
+};
 
 // 1. ฟังก์ชันค้นหา Booking ID จากเบอร์โทร (ผูกกับปุ่ม 🔍)
 window.handleSearchBookingId = async function() {
@@ -9601,6 +9861,58 @@ window.handleSearchBookingId = async function() {
         if (searchBtn) {
             searchBtn.disabled = false;
             searchBtn.innerHTML = originalText;
+        }
+    }
+};
+
+// 2. ฟังก์ชันยืนยันการยกเลิก (กดปุ่มสีแดง)
+window.submitCancelBooking = async function(event) {
+    if(event) event.preventDefault();
+    
+    const form = document.getElementById('cancel-form');
+    const idEl = document.getElementById('cancel-bookingId'); // อาจเป็น Input หรือ Select
+    const phoneEl = document.getElementById('cancel-phone');
+    const reasonEl = document.getElementById('cancel-reason');
+    const submitBtn = document.getElementById('btn-confirm-cancel');
+
+    // ดึงค่า
+    const bookingId = idEl ? idEl.value : '';
+    const phone = phoneEl ? phoneEl.value : '';
+    const reason = reasonEl ? reasonEl.value : '';
+
+    if (!bookingId || !phone || !reason) {
+        if(typeof showToast === 'function') showToast('กรุณากรอกข้อมูลให้ครบถ้วน (ต้องกดค้นหาก่อนนะคะ) 😿', 'error');
+        return;
+    }
+
+    // ล็อกปุ่ม
+    if(submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block;"></span> กำลังยกเลิก...';
+    }
+    
+    try {
+        const runner = (typeof window.googleScriptRun !== 'undefined') ? window.googleScriptRun : window.gas;
+        const res = await runner('apiUserCancelBooking', { bookingId, phone, reason });
+
+        if (!res || !res.ok) throw new Error(res ? res.error : 'ยกเลิกไม่สำเร็จ');
+
+        if(typeof showToast === 'function') showToast(`ยกเลิก Booking ID ${bookingId} เรียบร้อยแล้วค่ะ ✅`, 'success');
+        
+        // ปิด Modal
+        if (typeof window.closeCancelForm === 'function') window.closeCancelForm();
+        
+        // รีโหลดหน้า
+        if (typeof window.loadBookingsView === 'function') window.loadBookingsView();
+        if (typeof window.updateCounters === 'function') window.updateCounters();
+
+    } catch (err) {
+        console.error(err);
+        if(typeof showToast === 'function') showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+        // คืนค่าปุ่มถ้าพัง
+        if(submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'ยืนยันยกเลิก';
         }
     }
 };
@@ -11187,6 +11499,20 @@ statusClassFromKey = function(s_key) {
 };
 window.statusClassFromKey = statusClassFromKey;
 
+highlightCalendarByStatus = function(key) {
+  const all = document.querySelectorAll('.calendar-event');
+  if (!all.length) return;
+  if (!key || key === 'total') {
+    all.forEach(el => el.classList.remove('dim'));
+    return;
+  }
+  all.forEach(el => {
+    const isMatch = key === 'blocks'
+      ? (el.classList.contains('status-driver_block') || el.classList.contains('status-vehicle_block'))
+      : el.classList.contains(`status-${key}`);
+    el.classList.toggle('dim', !isMatch);
+  });
+};
 window.highlightCalendarByStatus = highlightCalendarByStatus;
 
 window.loadBookingsView = function() {
@@ -11232,7 +11558,7 @@ window.loadBookingsView = function() {
 
       const todayBookings = visibleData.filter(b => {
         const s = normalizeClientStatus(b.status || 'pending');
-        const allowedDaily = ['approved', 'pending', 'driver_block', 'vehicle_block', 'driver_special_approved'];
+        const allowedDaily = ['approved', 'pending', 'driver_block', 'vehicle_block'];
         if (allowedDaily.indexOf(s) === -1) return false;
 
         const start = String(b.startDate || '').trim();
@@ -11253,8 +11579,8 @@ window.loadBookingsView = function() {
       if (window.bookingsCurrentFilter) {
         filteredData = filteredData.filter(b => {
           const s = normalizeClientStatus(b.status || 'pending');
-          if (window.bookingsCurrentFilter === 'approved') return s === 'approved' || s === 'driver_special_approved';
-          if (window.bookingsCurrentFilter === 'blocks') return s === 'driver_block' || s === 'vehicle_block' || s === 'maintenance';
+          if (window.bookingsCurrentFilter === 'approved') return s === 'approved';
+          if (window.bookingsCurrentFilter === 'blocks') return s === 'driver_block' || s === 'vehicle_block';
           return s === window.bookingsCurrentFilter;
         });
       }

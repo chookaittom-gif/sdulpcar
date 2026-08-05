@@ -1,4 +1,5 @@
 (function initStaticConfig(global) {
+  var isStandalone = (typeof global.google === 'undefined' || !global.google.script || !global.google.script.run);
   var APP_CONFIG = {
     webAppUrl: 'https://script.google.com/macros/s/AKfycbx9YcO01C1dJxS_5lfZPALEWdSelp1QMEaWWUlDN7Kjc9OSudzW520a0ZJ95y0qOA-p-A/exec',
     requestTimeoutMs: 60000,
@@ -167,7 +168,7 @@
         return Promise.reject(new Error('Unknown action: ' + action + '. Supported actions: ' + Object.keys(API_ACTIONS).sort().join(', ')));
       }
 
-      var isStandalone = (typeof google === 'undefined' || !google.script || !google.script.run);
+
       var webAppUrl = normalizeUrl(cfg.webAppUrl);
       if (!isStandalone && (!webAppUrl || webAppUrl === 'PASTE_APPS_SCRIPT_WEB_APP_URL_HERE')) {
         return Promise.reject(new Error('APP_CONFIG.webAppUrl is not configured'));
@@ -230,7 +231,14 @@
                   throw new Error((json && json.error) ? json.error : 'API request failed');
                 }
 
-                return Object.prototype.hasOwnProperty.call(json, 'data') ? json.data : json;
+                var data = Object.prototype.hasOwnProperty.call(json, 'data') ? json.data : json;
+                if (action === 'getWebAppInitialData') {
+                  if (!data || !data.bookings || !data.vehicles || !data.drivers || !data.projects) {
+                    throw new Error('Partial initial data response from server');
+                  }
+                }
+
+                return data;
               })
               .finally(function() {
                 if (timeoutId) clearTimeout(timeoutId);
