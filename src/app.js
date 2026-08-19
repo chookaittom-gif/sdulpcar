@@ -8732,11 +8732,16 @@ window.loadDashboardView = function(source) {
             });
         };
 
+        // ⚡ PERF Step 2: ถ้า Charts ยังไม่โหลด → เรียก lazy loader (index.html) แทน warn+return
         if (typeof google === 'undefined' || !google.charts) {
-            console.warn('⚠️ Google Charts loader missing');
-            if (driverChartEl) setEmptyChart(driverChartEl, '😿', 'ไม่พบ Google Charts Loader');
-            if (vehicleChartEl) setEmptyChart(vehicleChartEl, '😿', 'ไม่พบ Google Charts Loader');
-            finish();
+            if (typeof window.loadGoogleChartsOnDemand === 'function') {
+                window.loadGoogleChartsOnDemand(runRender);
+            } else {
+                console.warn('⚠️ Google Charts loader missing');
+                if (driverChartEl) setEmptyChart(driverChartEl, '😿', 'ไม่พบ Google Charts Loader');
+                if (vehicleChartEl) setEmptyChart(vehicleChartEl, '😿', 'ไม่พบ Google Charts Loader');
+                finish();
+            }
             return;
         }
 

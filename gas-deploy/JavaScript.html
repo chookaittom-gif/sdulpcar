@@ -3804,11 +3804,21 @@ function getResourceBlockRenderMeta(row) {
 }
 
 function renderCalendar(year, month) {
+    let isFirstRender = false;
+    if (window.__isFirstCalendarRender !== false) {
+        window.__isFirstCalendarRender = false;
+        isFirstRender = true;
+        performance.mark('calendar-render-start');
+    }
+
     // 🍓 BERRY FIX: ระบบป้องกันการ Render ซ้ำซ้อน (Throttle Lock 50ms)
     const renderKey = `${year}-${month}`;
     const nowMs = Date.now();
     if (renderCalendar.__lastRun && renderCalendar.__lastKey === renderKey && (nowMs - renderCalendar.__lastRun < 50)) {
         console.log('⚡ [Calendar] Skipped redundant render (Throttle Lock)');
+        if (isFirstRender) {
+            window.__isFirstCalendarRender = true;
+        }
         return;
     }
     renderCalendar.__lastRun = nowMs;
@@ -4155,6 +4165,13 @@ function renderCalendar(year, month) {
         normalizeCalendarInteractiveState();
 
         console.log(`[Calendar] renderCalendar OK: ${month}/${year} events=${monthEvents.length}`);
+        if (isFirstRender) {
+            performance.mark('calendar-render-end');
+            performance.measure('calendar first render', 'calendar-render-start', 'calendar-render-end');
+            performance.mark('init-ready');
+            performance.measure('total time ถึง INIT_READY', 'init-start', 'init-ready');
+            logPerfMeasures_();
+        }
     });
 }
 
@@ -7684,6 +7701,29 @@ function changeTimelineDate(deltaDays) {
 }
 
 
+window.SHOW_PERF_LOGS = true;
+function logPerfMeasures_() {
+  if (!window.SHOW_PERF_LOGS) return;
+  const measures = [
+    'GAS response time',
+    'JSON parse',
+    'assign initial data',
+    'reindex bookings',
+    'UI wiring',
+    'counters',
+    'calendar first render',
+    'total time ถึง INIT_READY'
+  ];
+  console.log('%c====== PERFORMANCE MEASUREMENTS (ms) ======', 'font-weight: bold; color: #1e3a8a;');
+  measures.forEach(name => {
+    const entries = performance.getEntriesByName(name);
+    if (entries.length > 0) {
+      console.log(`⏱️ %c${name}: %c${entries[entries.length - 1].duration.toFixed(2)} ms`, 'color: #475569;', 'font-weight: bold; color: #0f766e;');
+    }
+  });
+  console.log('%c============================================', 'font-weight: bold; color: #1e3a8a;');
+}
+
 function initializeApp(options) {
   const silentIfRunning = !!(options && options.silentIfRunning);
   if (window.vbInitState === 'READY') return Promise.resolve(true);
@@ -7718,6 +7758,7 @@ function initializeApp(options) {
     if (!error && !response) return 'empty response';
     if (response && (response.cancelled || response.benign)) return 'Apps Script response interrupted';
     if (message.indexOf('http 404') > -1 || message.indexOf('404') > -1) return 'HTTP 404';
+    if (/http 5\d\d/.test(message) || message.indexOf('invalid json response') > -1) return 'server error';
     if (message.indexOf('timeout') > -1 || message.indexOf('timed out') > -1) return 'timeout';
     if (message.indexOf('abort') > -1 || message.indexOf('aborted') > -1) return 'timeout';
     if (message.indexOf('failed to fetch') > -1 || message.indexOf('network') > -1) return 'network error';
@@ -7771,6 +7812,8 @@ function initializeApp(options) {
   }
 
   window.vbInitPromise = (async () => {
+    performance.mark('init-start');
+    window.__isFirstCalendarRender = true;
     console.log('🚀 Initializing Vehicle Booking System (V-Berry Fix)...');
 
     try {
@@ -7837,16 +7880,22 @@ function initializeApp(options) {
       const toastEl = document.getElementById('vtoast');
       if (toastEl) toastEl.style.display = 'none';
 
+      performance.mark('assign-data-start');
       window.allBookingsData = (initData.data && initData.data.bookings) || [];
       window.vehiclesList    = (initData.data && initData.data.vehicles) || { vans: [], trucks: [], all: [] };
       window.driversList     = (initData.data && initData.data.drivers) || [];
       window.projectList     = (initData.data && initData.data.projects) || [];
+      performance.mark('assign-data-end');
+      performance.measure('assign initial data', 'assign-data-start', 'assign-data-end');
 
+      performance.mark('reindex-start');
       try {
         if (typeof reindexBookings === 'function') reindexBookings(window.allBookingsData);
       } catch (e) {
         console.warn('reindexBookings warning:', e);
       }
+      performance.mark('reindex-end');
+      performance.measure('reindex bookings', 'reindex-start', 'reindex-end');
 
       let localUser = null;
       try { localUser = JSON.parse(localStorage.getItem('vb_current_user')); } catch (e) {}
@@ -7868,13 +7917,20 @@ function initializeApp(options) {
 
       window.currentUser = currentUser;
 
+      performance.mark('ui-wiring-start');
       try { if (typeof updateHeaderUI === 'function') updateHeaderUI(currentUser); } catch (e) {}
       try { if (typeof initUiComponents === 'function') initUiComponents(); } catch (e) { console.warn('initUiComponents warning:', e); }
       try { if (typeof openInitialTab === 'function') openInitialTab(); } catch (e) {}
+      performance.mark('ui-wiring-end');
+      performance.measure('UI wiring', 'ui-wiring-start', 'ui-wiring-end');
+
+      performance.mark('counters-start');
       try { if (typeof updateCounters === 'function') updateCounters(); } catch (e) {}
       try { if (typeof syncReturnDateWithStartDate === 'function') syncReturnDateWithStartDate(); } catch (e) {}
       try { if (typeof installSelfTestFloatingButton === 'function') installSelfTestFloatingButton(); } catch (e) {}
       try { if (typeof wireVehicleCountAutoClampOnce === 'function') wireVehicleCountAutoClampOnce(); } catch (e) {}
+      performance.mark('counters-end');
+      performance.measure('counters', 'counters-start', 'counters-end');
 
       window.vbInitState = 'READY';
       window.isAppInitialized = true;
@@ -7882,7 +7938,9 @@ function initializeApp(options) {
       console.log('✅ Application initialized successfully!');
 
       try {
-        if (typeof renderCalendar === 'function' && window.calendarState) {
+        if (typeof window.__berryScheduleCalendarResize__ === 'function') {
+          window.__berryScheduleCalendarResize__('init_ready');
+        } else if (typeof renderCalendar === 'function' && window.calendarState) {
           renderCalendar(window.calendarState.currentYear, window.calendarState.currentMonth);
         }
       } catch (e) {
@@ -8675,11 +8733,16 @@ window.loadDashboardView = function(source) {
             });
         };
 
+        // ⚡ PERF Step 2: ถ้า Charts ยังไม่โหลด → เรียก lazy loader (index.html) แทน warn+return
         if (typeof google === 'undefined' || !google.charts) {
-            console.warn('⚠️ Google Charts loader missing');
-            if (driverChartEl) setEmptyChart(driverChartEl, '😿', 'ไม่พบ Google Charts Loader');
-            if (vehicleChartEl) setEmptyChart(vehicleChartEl, '😿', 'ไม่พบ Google Charts Loader');
-            finish();
+            if (typeof window.loadGoogleChartsOnDemand === 'function') {
+                window.loadGoogleChartsOnDemand(runRender);
+            } else {
+                console.warn('⚠️ Google Charts loader missing');
+                if (driverChartEl) setEmptyChart(driverChartEl, '😿', 'ไม่พบ Google Charts Loader');
+                if (vehicleChartEl) setEmptyChart(vehicleChartEl, '😿', 'ไม่พบ Google Charts Loader');
+                finish();
+            }
             return;
         }
 
