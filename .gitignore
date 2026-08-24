@@ -11,3 +11,9 @@ agent/
 # Temp files
 tto
 repomix-output.xml
+
+.vercel
+.env*
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/

@@ -1,5 +1,4 @@
 (function initStaticConfig(global) {
-  var isStandalone = (typeof global.google === 'undefined' || !global.google.script || !global.google.script.run);
   var APP_CONFIG = {
     webAppUrl: 'https://script.google.com/macros/s/AKfycbx9YcO01C1dJxS_5lfZPALEWdSelp1QMEaWWUlDN7Kjc9OSudzW520a0ZJ95y0qOA-p-A/exec',
     requestTimeoutMs: 60000,
@@ -120,13 +119,6 @@
     return !!(err && (err.statusCode === 404 || String(err.message || err).indexOf('HTTP 404') > -1));
   }
 
-  // Proxy returns 5xx when Apps Script answers with an HTML error page instead of JSON.
-  function isHttp5xxError(err) {
-    if (!err) return false;
-    if (Number(err.statusCode) >= 500 && Number(err.statusCode) <= 599) return true;
-    return /HTTP 5\d\d/.test(String(err.message || err));
-  }
-
   function sleepMs(ms) {
     return new Promise(function(resolve) {
       setTimeout(resolve, ms);
@@ -138,16 +130,6 @@
     return !!(err && err.name === 'AbortError') ||
       msg.indexOf('AbortError') > -1 ||
       msg.indexOf('signal is aborted') > -1;
-  }
-
-  function isNetworkError(err) {
-    if (isAbortLikeError(err)) return false;
-    var msg = String(err && err.message ? err.message : err || '');
-    return !!(err && err.name === 'TypeError') ||
-      msg.indexOf('Failed to fetch') > -1 ||
-      msg.indexOf('NetworkError') > -1 ||
-      msg.indexOf('Load failed') > -1 ||
-      msg.indexOf('ERR_CONNECTION') > -1;
   }
 
   function createFriendlyAbortError() {
@@ -185,9 +167,8 @@
         return Promise.reject(new Error('Unknown action: ' + action + '. Supported actions: ' + Object.keys(API_ACTIONS).sort().join(', ')));
       }
 
-
       var webAppUrl = normalizeUrl(cfg.webAppUrl);
-      if (!isStandalone && (!webAppUrl || webAppUrl === 'PASTE_APPS_SCRIPT_WEB_APP_URL_HERE')) {
+      if (!webAppUrl || webAppUrl === 'PASTE_APPS_SCRIPT_WEB_APP_URL_HERE') {
         return Promise.reject(new Error('APP_CONFIG.webAppUrl is not configured'));
       }
 
@@ -199,16 +180,16 @@
 
       var pending = new Promise(function(resolve, reject) {
         queue.push(function() {
-          var useGet = !isStandalone && isReadAction(action);
-          var requestUrl = isStandalone ? '/api/gas' : (useGet ? buildGetUrl(webAppUrl, action, payload) : webAppUrl);
+          var useGet = isReadAction(action);
+          var requestUrl = useGet ? buildGetUrl(webAppUrl, action, payload) : webAppUrl;
           var baseFetchOptions = {
-            method: (isStandalone || !useGet) ? 'POST' : 'GET',
+            method: useGet ? 'GET' : 'POST',
             mode: 'cors',
             redirect: 'follow',
             credentials: 'omit'
           };
 
-          if (isStandalone || !useGet) {
+          if (!useGet) {
             baseFetchOptions.headers = {
               'Content-Type': 'text/plain;charset=utf-8'
             };
@@ -248,15 +229,7 @@
                   throw new Error((json && json.error) ? json.error : 'API request failed');
                 }
 
-                var data = Object.prototype.hasOwnProperty.call(json, 'data') ? json.data : json;
-                if (action === 'getWebAppInitialData') {
-                  var payload = (data && data.data) ? data.data : data;
-                  if (!payload || !payload.bookings || !payload.vehicles || !payload.drivers || !payload.projects) {
-                    throw new Error('Partial initial data response from server');
-                  }
-                }
-
-                return data;
+                return Object.prototype.hasOwnProperty.call(json, 'data') ? json.data : json;
               })
               .finally(function() {
                 if (timeoutId) clearTimeout(timeoutId);
@@ -265,20 +238,18 @@
 
           var attempts = 0;
           var maxAttempts = shouldRetryOnce(action) ? 2 : 1;
-          var initialDataRetryDelays = [1500, 3000, 5000];
+          var http404RetryDelays = [1500, 3000, 5000];
 
           function executeWithRetry() {
             attempts++;
             return runFetchAttempt().catch(function(err) {
-              var isRetryableTransport = isHttp404Error(err) || isHttp5xxError(err) || isNetworkError(err);
-              if (isInitialDataAction(action) && isRetryableTransport && attempts <= initialDataRetryDelays.length) {
-                var retryReason = isHttp404Error(err) ? 'HTTP 404' : (isHttp5xxError(err) ? 'HTTP ' + (err.statusCode || '5xx') : 'network error');
+              if (isInitialDataAction(action) && isHttp404Error(err) && attempts <= http404RetryDelays.length) {
                 global.vbInitState = 'RETRYING';
-                console.warn('RETRY getWebAppInitialData ' + attempts + '/3 after ' + retryReason);
+                console.warn('RETRY getWebAppInitialData ' + attempts + '/3 after HTTP 404');
                 try {
                   if (typeof global.showToast === 'function') global.showToast('กำลังลองโหลดข้อมูลอีกครั้ง...', 'info');
                 } catch (_) {}
-                return sleepMs(initialDataRetryDelays[attempts - 1]).then(executeWithRetry);
+                return sleepMs(http404RetryDelays[attempts - 1]).then(executeWithRetry);
               }
               if (isAbortLikeError(err)) {
                 if (attempts < maxAttempts) return executeWithRetry();

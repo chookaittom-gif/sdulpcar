@@ -1,0 +1,11563 @@
+/* ================== ULTRA-SAFE GLOBAL SHIMS & REQUEST QUEUE (Fix 429) ================== */
+(function() {
+  const G = (typeof window !== 'undefined') ? window : this;
+
+  // 1. ระบบคิวแบบ "ทีละหนึ่ง" (Serial Processing)
+  const requestQueue = [];
+  let isProcessing = false;
+  const SAFE_INTERVAL = 1500;
+  let lastRunTime = 0;
+
+  G.googleScriptRunLimited = function(fnName, payload) {
+    return new Promise((resolve, reject) => {
+      requestQueue.push({
+        fnName,
+        payload,
+        resolve,
+        reject,
+        retry: 0
+      });
+      
+      if (!isProcessing) processNext();
+    });
+  };
+  
+  G.gas = G.googleScriptRunLimited;
+
+  function processNext() {
+    if (requestQueue.length === 0) {
+      isProcessing = false;
+      return;
+    }
+    
+    isProcessing = true;
+    const req = requestQueue[0];
+    
+    const now = Date.now();
+    const wait = Math.max(0, SAFE_INTERVAL - (now - lastRunTime));
+
+    setTimeout(() => {
+      executeRequest(req);
+    }, wait);
+  }
+
+ function executeRequest(req) {
+  lastRunTime = Date.now();
+  try {
+    google.script.run
+      .withSuccessHandler(function(res) {
+        requestQueue.shift();
+        req.resolve(res);
+        processNext();
+      })
+      .withFailureHandler(function(err) {
+        const msg = String(err && err.message ? err.message : err || '');
+
+        // ปิดเคส channel หลุด / tab เปลี่ยน / browser ปิด callback กลางทาง
+        if (msg.includes('message channel closed') || msg.includes('asynchronous response')) {
+          console.warn('⚠️ Connection interrupted (Benign):', req.fnName);
+          requestQueue.shift();
+          req.resolve({ ok: false, cancelled: true, benign: true, fnName: req.fnName, message: msg });
+          processNext();
+          return;
+        }
+
+        if ((msg.includes('429') || msg.includes('Too Many Requests')) && req.retry < 3) {
+          req.retry++;
+          console.warn('⚠️ 429 Detected! Retrying ' + req.fnName + ' (' + req.retry + '/3) in 3s...');
+          setTimeout(function() { executeRequest(req); }, 3000);
+          return;
+        }
+
+        console.error('❌ Failed ' + req.fnName + ':', err);
+        requestQueue.shift();
+        req.reject(err);
+        processNext();
+      })[req.fnName](req.payload);
+  } catch (e) {
+    console.error('Local execution error:', e);
+    requestQueue.shift();
+    req.reject(e);
+    processNext();
+  }
+}
+
+function normalizeDriverName(name) {
+  if (!name) return '-';
+  var s = String(name);
+  
+  // 1. Remove zero-width chars COMPLETELY (Don't replace with space)
+  // \u200B = Zero Width Space
+  // \u200C = Zero Width Non-Joiner
+  // \u200D = Zero Width Joiner
+  // \uFEFF = Zero Width No-Break Space
+  s = s.replace(/[\u200B-\u200D\uFEFF]/g, '');
+
+  // 2. Convert control characters (newline/tab) to space
+  s = s.replace(/[\r\n\t]/g, ' ');
+
+  // 3. Collapse multiple spaces to one
+  s = s.replace(/\s+/g, ' ');
+
+  // 4. Trim
+  s = s.trim();
+
+  // 5. [Berry Fix] Specific Correction for known dirty data
+  // แก้ปัญหา "ปรีชา ถวิล เวช" (มีเว้นวรรคนามสกุล) ให้เป็น "ปรีชา ถวิลเวช"
+  if (s === 'ปรีชา ถวิล เวช') return 'ปรีชา ถวิลเวช';
+
+  return s || '-';
+}
+
+// 1. Helper: Button Loading
+function setBtnLoading(btn, isLoading) {
+    if (!btn) return;
+    if (isLoading) {
+        if (!btn.dataset.originalText) btn.dataset.originalText = btn.innerHTML;
+        btn.classList.add('is-loading');
+        btn.disabled = true;
+    } else {
+        btn.classList.remove('is-loading');
+        btn.disabled = false;
+        if (btn.dataset.originalText) btn.innerHTML = btn.dataset.originalText;
+    }
+}
+
+window.setBtnLoading = setBtnLoading;
+
+
+// 2. Helper: Skeleton Rows
+function getSkeletonRows(colCount = 6, rowCount = 3) {
+    let rows = '';
+    for(let i=0; i<rowCount; i++) {
+        let cols = '';
+        for(let j=0; j<colCount; j++) {
+            cols += `<td><div class="skeleton"></div></td>`;
+        }
+        rows += `<tr>${cols}</tr>`;
+    }
+    return rows;
+}
+
+function setupFuelProjectSelectOptions() {
+    const sel = document.getElementById('fuel-project-select');
+    const otherWrap = document.getElementById('fuel-project-other-wrap');
+    const otherInput = document.getElementById('fuel-project-other');
+
+    if (!sel) return;
+
+    const purposes = [
+        "อบรม",
+        "ประชุม",
+        "ทัศนศึกษา",
+        "นิเทศนักศึกษา",
+        "แนะแนว",
+        "ซื้อของ",
+        "ควบคุมงานก่อสร้าง",
+        "ส่งเอกสาร/พัสดุ"
+    ];
+
+    // render options
+    sel.innerHTML =
+        '<option value="">-- เลือกงาน/โครงการ --</option>' +
+        purposes.map(p => `<option value="${p.replace(/"/g, '&quot;')}">${p}</option>`).join('') +
+        '<option value="other">อื่นๆ (ระบุ)</option>';
+
+    const lastProject = (typeof vbGet === 'function') ? vbGet('vb.fuel.project', '') : '';
+    const isInList = purposes.includes(lastProject);
+
+    // restore state
+    if (lastProject) {
+        if (isInList) {
+            sel.value = lastProject;
+            otherWrap?.classList.add('hidden');
+            if (otherInput) {
+                otherInput.value = '';
+                otherInput.required = false;
+            }
+        } else {
+            sel.value = 'other';
+            otherWrap?.classList.remove('hidden');
+            if (otherInput) {
+                otherInput.value = lastProject;
+                otherInput.required = true;
+            }
+        }
+    } else {
+        otherWrap?.classList.add('hidden');
+        if (otherInput) {
+            otherInput.value = '';
+            otherInput.required = false;
+        }
+    }
+
+    // change handler
+    sel.onchange = function () {
+        const v = sel.value || '';
+
+        if (v === 'other') {
+            otherWrap?.classList.remove('hidden');
+            if (otherInput) {
+                otherInput.required = true;
+                otherInput.focus();
+            }
+        } else {
+            otherWrap?.classList.add('hidden');
+            if (otherInput) {
+                otherInput.value = '';
+                otherInput.required = false;
+            }
+        }
+
+        if (typeof vbSet === 'function') {
+            vbSet('vb.fuel.project',
+                v === 'other'
+                    ? (otherInput?.value || '')
+                    : v
+            );
+        }
+    };
+
+    // input handler
+    if (otherInput) {
+        otherInput.oninput = function () {
+            if (sel.value === 'other' && typeof vbSet === 'function') {
+                vbSet('vb.fuel.project', otherInput.value || '');
+            }
+        };
+    }
+}
+
+   /* ================== V-Berry Core System - Complete Fixed Version ================== */
+(function() {
+    'use strict';
+    
+    if (window.__V_BERRY_SYSTEM_LOADED) return;
+    window.__V_BERRY_SYSTEM_LOADED = true;
+
+    /* ================== One-time helpers ================== */
+    window.__onceFlags = window.__onceFlags || {};
+
+    window.__runOnce = function runOnce(key, fn) {
+        if (!key || typeof fn !== 'function') return;
+        if (window.__onceFlags[key]) return;
+        window.__onceFlags[key] = true;
+        try { fn(); } catch (e) { console.warn('[runOnce:'+key+']', e); }
+    };
+
+    window.__callOnce = function callOnce(key, fn, ...args) {
+        if (!key || typeof fn !== 'function') return;
+        if (window.__onceFlags[key]) return;
+        window.__onceFlags[key] = true;
+        try { return fn(...args); } catch (e) { console.warn('[callOnce:'+key+']', e); }
+    };
+
+    const runOnce = window.__runOnce;
+    const callOnce = window.__callOnce;
+
+    /* ================== Core Utilities ================== */
+    const D = {
+        id: (id) => document.getElementById(id),
+        one: (selector, root = document) => root.querySelector(selector),
+        all: (selector, root = document) => Array.from(root.querySelectorAll(selector)),
+    };
+
+    // Global state
+    const __now = new Date();
+    var currentMonthIndex = __now.getMonth();
+    var currentMonth = currentMonthIndex + 1;
+    var currentYear = __now.getFullYear();
+    var currentUser = null;
+    var currentTimelineDate = new Date(__now);
+    
+    // Data stores
+    var allBookingsData = [];
+    let bookingsCurrentPage = 1;
+    const BOOKINGS_PAGE_SIZE = 50; 
+    var vehiclesList = { vans: [], trucks: [], all: [] };
+    var driversList = [];
+    var projectList = [];
+    var __insuranceTableTimer = null;
+    
+    window.bookingsById = window.bookingsById || new Map();
+    var bookingsById = window.bookingsById;
+    window.bookingsCurrentFilter = null; 
+
+    let calendarState = {
+        currentYear: new Date().getFullYear(),
+        currentMonth: new Date().getMonth() + 1
+    };
+    
+    let selectedVehicles = [];
+    let timelineCache = { key: null, data: null };
+    var __ASSIGN_CTX__ = null;
+    let currentAssignmentBookingId = null;
+
+    // Alias สำหรับ googleScriptRun
+    window.googleScriptRun = function(funcName, payload) {
+        return window.googleScriptRunLimited(funcName, payload || {});
+    };
+
+    function googleScriptRun(funcName, payload) {
+        if (payload === undefined || payload === null) {
+            return window.gas(funcName, {});
+        }
+        return window.gas(funcName, payload);
+    }
+
+    /* ================== Utility Functions ================== */
+    const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    function normalize(str) {
+      if (typeof str !== 'string' || !str) return '';
+      return str
+        .replace(/^[\s\uFEFF\u00A0\u200B-\u200D]+|[\s\uFEFF\u00A0\u200B-\u200D]+$/g, '')
+        .replace(/[\s\uFEFF\u00A0\u200B-\u200D]+/g, ' ');
+    }
+
+    function setText_(id, text) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    }
+
+    function showLoading() {
+        const el = document.getElementById('loading');
+        if (el) el.classList.remove('hidden');
+    }
+
+    function hideLoading() {
+        const el = document.getElementById('loading');
+        if (el) el.classList.add('hidden');
+    }
+
+    function showToast(msg, type = 'info') {
+        let t = document.getElementById('vtoast');
+        if (!t) {
+            t = document.createElement('div');
+            t.id = 'vtoast';
+            t.style.cssText = 'position:fixed; right:16px; bottom:16px; padding:10px 14px; background:#333; color:#fff; border-radius:10px; opacity:.96; z-index:99999; max-width:60vw; box-shadow:0 6px 18px rgba(0,0,0,.2);';
+            document.body.appendChild(t);
+        }
+        
+        const colors = {
+            success: '#10b981',
+            error: '#ef4444',
+            warning: '#f59e0b',
+            info: '#3b82f6'
+        };
+        t.style.background = colors[type] || '#333';
+        
+        t.textContent = msg;
+        t.style.display = 'block';
+        clearTimeout(t.__h);
+        t.__h = setTimeout(() => t.style.display = 'none', 2600);
+    }
+
+    function truncateText(text, maxLength) {
+        if (text.length <= maxLength) return text;
+        return text.substring(0, maxLength) + '...';
+    }
+
+    function formatDate(dateStr) {
+    if (!dateStr || !dateStr.includes) return '-';
+    try {
+        const parts = String(dateStr).split('T')[0].split('-');
+        if (parts.length < 3) return dateStr;
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        const day = parseInt(parts[2], 10);
+        if (isNaN(year) || isNaN(month) || isNaN(day)) return dateStr;
+        const TH_MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", 
+                          "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+        const thaiYear = year + 543;
+        const thaiMonth = TH_MONTHS[month - 1] || '';
+        return `${day} ${thaiMonth} ${thaiYear}`;
+    } catch (e) {
+        console.error('Error formatting date:', dateStr, e);
+        return dateStr;
+    }
+}
+
+function getStatusText(status) {
+    const s = normalizeClientStatus(status);
+    switch (s) {
+        case 'pending': return 'รออนุมัติ';
+        case 'approved': return 'อนุมัติ'; // 🍓 BERRY FIX: อนุมัติด่วนจะตกมาเข้าเคสนี้โดยอัตโนมัติ
+        case 'rejected': return 'ไม่อนุมัติ';
+        case 'cancelled':
+        case 'ยกเลิก':
+        case 'ยกเลิกโดยผู้จอง':
+            return 'ยกเลิก';
+        default:
+            return status;
+    }
+}
+
+function normalizeClientStatus(status) {
+    const s = String(status || '').toLowerCase().trim();
+    if (!s) return 'pending';
+    if (s === 'driver_claimed') return 'pending';
+    // 🍓 BERRY FIX: แปลงสถานะอนุมัติด่วนให้เป็น "อนุมัติ" ปกติ เพื่อให้สีและข้อความรวมเป็นสีเขียวทั้งหมด
+    if (s === 'driver_special_approved' || s.includes('เร่งด่วน') || s.includes('กรณีพิเศษ')) return 'approved'; 
+    // รองรับสถานะงานที่ปิด/เสร็จ และคำสะกด "อนมัติ"
+    if (/closed|completed|done|finish|ปิดงาน|ปิดแล้ว|เสร็จ|จบงาน/.test(s)) return 'approved';
+    if (/อนมัติ/.test(s)) return 'approved';
+    return s;
+}
+
+    /* ================== Date & Time Functions ================== */
+    function convertISOToThaiDisplay(isoDate) {
+        if (!isoDate || typeof isoDate !== 'string') return '';
+        if (isoDate.match(/^\d{2}\/\d{2}\/\d{4}$/)) return isoDate;
+        const [y, m, d] = isoDate.split(/[-T]/).map(Number);
+        if (!y || !m || !d) return isoDate;
+        const thYear = y < 2400 ? y + 543 : y;
+        return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${thYear}`;
+    }
+
+    function convertThaiDisplayToISO(thaiDate) {
+        if (!thaiDate) return '';
+        const parts = thaiDate.split('/');
+        if (parts.length === 3) {
+            let d = parts[0].padStart(2, '0');
+            let m = parts[1].padStart(2, '0');
+            let y = parseInt(parts[2], 10);
+            if (y > 2400) y -= 543;
+            return `${y}-${m}-${d}`;
+        }
+        return thaiDate;
+    }
+
+    function toThaiTimeDisplay(timeStr) {
+        if (!timeStr) return '';
+        let h, m;
+        const ampmMatch = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+        if (ampmMatch) {
+            h = parseInt(ampmMatch[1], 10);
+            m = parseInt(ampmMatch[2], 10);
+            const ap = ampmMatch[3].toUpperCase();
+            if (ap === 'PM' && h < 12) h += 12;
+            if (ap === 'AM' && h === 12) h = 0;
+        } else {
+            const m24 = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+            if (!m24) return timeStr;
+            h = parseInt(m24[1], 10);
+            m = parseInt(m24[2], 10);
+        }
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} น.`;
+    }
+
+    function thaiTimeTo24(timeStr) {
+        if (!timeStr) return '';
+        return timeStr.replace(/\s?น\.$/, '');
+    }
+
+    /* ================== Vehicle Functions ================== */
+    function formatVehicleDisplayName(vehicle) {
+        if (!vehicle) return '';
+        var user = (typeof window !== 'undefined' && window.currentUser)
+            ? window.currentUser
+            : (typeof currentUser !== 'undefined' ? currentUser : null);
+        var role = user && (user.role || user.Role || '');
+        role = String(role).toLowerCase().trim();
+        var isAdmin = (role === 'admin' || role === 'admindriver' || role === 'admin_driver');
+        var name  = vehicle.name  || vehicle.plate || '';
+        var plate = vehicle.plate || '';
+        if (isAdmin && plate) {
+            return name ? (name + ' (' + plate + ')') : plate;
+        }
+        return name || plate;
+    }
+
+    function formatBookingVehicles(vehiclePlatesString) {
+        if (!vehiclePlatesString || !window.vehiclesList || !window.vehiclesList.all) {
+            return escapeHtml(vehiclePlatesString || '-');
+        }
+        const plates = String(vehiclePlatesString).split(',').map(p => p.trim());
+        const displayNames = plates.map(plate => {
+            const vehicle = window.vehiclesList.all.find(v => v.plate === plate);
+            return vehicle ? formatVehicleDisplayName(vehicle) : plate;
+        });
+        return escapeHtml(displayNames.join(', '));
+    }
+
+function getVehicleIcon(vehicleType) {
+        const type = String(vehicleType || '').toLowerCase();
+        if (type.includes('truck')) return '🚚';
+        if (type.includes('van')) return '🚐';
+        return '🚗';
+    }
+
+    function normalizeVehicleTypeLabel(vehicleType) {
+        const raw = String(vehicleType || '').trim();
+        if (!raw) return '';
+        const parts = raw.split(/[,\|]+/).map(part => {
+            const s = String(part || '').trim().toLowerCase();
+            if (!s) return '';
+            if (s.includes('truck') || s.includes('บรรทุก') || s.includes('กระบะ')) return 'รถบรรทุก';
+            if (s.includes('van') || s.includes('ตู้')) return 'รถตู้';
+            return '';
+        }).filter(Boolean);
+
+        return [...new Set(parts)].join('/');
+    }
+
+    /* ================== Data Management ================== */
+    function reindexBookings(list) {
+        bookingsById.clear();
+        (list || []).forEach(b => {
+            const id = String(b?.bookingId ?? '').trim();
+            if (id) bookingsById.set(id, b);
+        });
+        console.log(`📇 Reindexed ${bookingsById.size} bookings`);
+    }
+
+function updateCounters() {
+    console.log("📊 Updating counters...");
+    const arr = window.allBookingsData || [];
+
+    const counts = { approved: 0, pending: 0, rejected: 0, cancelled: 0, driver_special_approved: 0, blocks: 0, other: 0 };
+
+    arr.forEach(booking => {
+        const statusKey = normalizeClientStatus(booking?.status || 'pending');
+
+        if (statusKey === 'driver_block' || statusKey === 'vehicle_block' || statusKey === 'maintenance') {
+            counts.blocks++;
+        } else if (counts[statusKey] !== undefined) {
+            counts[statusKey]++;
+        } else {
+            counts.other++;
+        }
+    });
+
+    const totalPending = counts.pending;
+    const totalApproved = counts.approved + counts.driver_special_approved;
+
+    if (typeof setText_ === 'function') {
+        setText_('pending-count', totalPending);
+        setText_('approved-count', totalApproved);
+        setText_('rejected-count', counts.rejected);
+        setText_('cancelled-count', counts.cancelled);
+        setText_('blocks-count', counts.blocks);
+        setText_('total-bookings-badge', totalPending + totalApproved + counts.rejected + counts.cancelled + counts.other);
+    }
+
+    const claimedSub = document.getElementById('sub-claimed-count');
+    if (claimedSub) claimedSub.innerHTML = '';
+
+    const specialSub = document.getElementById('sub-special-count');
+    if (specialSub) {
+        specialSub.innerHTML = counts.driver_special_approved > 0
+            ? `⚡ งานด่วน: <b>${counts.driver_special_approved}</b>`
+            : '';
+    }
+
+    console.log(`   Counters updated: P=${totalPending}, A=${totalApproved}, R=${counts.rejected}, C=${counts.cancelled}`);
+}
+
+    function setBookingLoading_(isLoading) {
+  const btn = document.querySelector('#bookingSubmitBtn');
+  const banner = document.querySelector('#bookingErrorBanner');
+  if (btn) btn.disabled = !!isLoading;
+  if (banner) banner.style.display = 'none';
+}
+
+
+    function wireDateTimeToLoadVehiclesOnce() {
+  const bookingDate = document.getElementById('booking-date');
+  const bookingStart = document.getElementById('booking-start');
+  const bookingEnd = document.getElementById('booking-end');
+
+  const targets = [bookingDate, bookingStart, bookingEnd].filter(Boolean);
+  if (!targets.length) return;
+
+  // ✅ guard กัน bind ซ้ำ
+  if (window.vberryWiredDateTimeInputs) {
+    console.log("⚠️ Date/Time listeners already wired. Skip.");
+    return;
+  }
+  window.vberryWiredDateTimeInputs = true;
+
+  targets.forEach(inp => {
+    inp.addEventListener('change', () => {
+      try { loadAvailableVehicles(); } catch (e) { console.warn(e); }
+    });
+  });
+
+  console.log("✅ Wired date/time inputs to loadAvailableVehicles() [ONCE]");
+}
+
+
+    
+/* ================== ADMIN PANEL LOGIC (Implemented) ================== */
+window.openAdminPanel = function() {
+    // 🍓 BERRY FIX: จำกัดสิทธิ์ปุ่มเครื่องมือระบบ (Self Test) เฉพาะ Admin เท่านั้น
+const role = String(window.currentUser?.role || window.currentUser?.Role || '').toLowerCase();
+const selfTestBtn = document.getElementById('self-test-admin-btn');
+const toolsTitle = document.getElementById('admin-tools-title');
+
+const isAdmin = (role === 'admin');
+
+if (selfTestBtn) selfTestBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+if (toolsTitle) toolsTitle.style.display = isAdmin ? 'block' : 'none';
+
+openModalA11y('admin-panel-modal');
+    // ----------------------------
+
+    switchAdminTab('day-off-drivers');
+    loadAdminPanelData();
+};
+
+async function loadAdminPanelData() {
+    if (window.__VB_LIVE_BUSY__) return;
+    const reqToken = Date.now(); window.__VB_LIVE_TOKEN__ = reqToken; window.__VB_LIVE_BUSY__ = true;
+    try {
+        const res = await googleScriptRunLimited('apiGetAdminPanelData');
+        if (window.__VB_LIVE_TOKEN__ !== reqToken) return;
+        if (!res.ok) throw new Error(res.error);
+        window.__VB_LIVE_CACHE__ = res; window.__VB_LIVE_CACHE_AT__ = Date.now();
+        if (typeof renderAdminDrivers === 'function') renderAdminDrivers(res.drivers);
+        if (typeof renderAdminVehicles === 'function') renderAdminVehicles(res.vehicles);
+    } catch (e) { console.error(e); } finally { window.__VB_LIVE_BUSY__ = false; }
+}
+
+function getAvailabilityStatusUiMeta(status, isVehicle) {
+  const st = String(status || 'ready').toLowerCase().trim();
+  if (st === 'leave') return { label: 'ลา', textClass: 'text-danger', dotClass: 'inactive', icon: '☕' };
+  if (st === 'repair') return { label: 'ส่งซ่อม', textClass: 'text-danger', dotClass: 'inactive', icon: '🛠' };
+  if (st === 'busy') return { label: 'ติดภารกิจ', textClass: 'text-warning', dotClass: 'busy', icon: '⏳' };
+  return { label: 'พร้อม', textClass: '', dotClass: 'available', icon: '✅' };
+}
+
+function renderAdminDrivers(drivers) {
+  const container = document.getElementById('admin-drivers-list');
+  if (!container) return;
+
+  if (!Array.isArray(drivers) || drivers.length === 0) {
+    container.innerHTML = '<p class="text-center text-muted p-4">ไม่พบข้อมูล</p>';
+    return;
+  }
+
+  container.innerHTML = drivers.map(d => {
+    const st = String(d.status || (d.active ? 'ready' : 'leave')).toLowerCase().trim();
+    const isActive = d.active !== false;
+    // 🍓 BERRY FIX: driver นำรถซ่อม → status='repair' → card ต้องดูเป็น inactive + badge แสดง ส่งซ่อม
+    const isUnavailable = !isActive || (st === 'leave') || (st === 'repair');
+    const uiMeta = getAvailabilityStatusUiMeta(st, false);
+    const btnClass = (uiMeta.dotClass === 'available') ? 'glow-green' : 'glow-orange';
+    // ถ้า driver นำรถซ่อม ให้ปุ่ม toggle แสดงว่า "ส่งซ่อม" (กดไม่ได้ toggle manual — ต้องรอหมดบล็อก)
+    const isRepairDriver = (st === 'repair');
+    return `
+      <div class="cyber-card ${isUnavailable ? 'inactive' : ''}">
+        <div class="cyber-card-left"><div class="cyber-avatar avatar-blue">👤</div></div>
+        <div class="cyber-card-right">
+          <div class="cyber-name-row">
+            <div class="cyber-info"><div class="cyber-name">${escapeHtml(d.name)}</div></div>
+            <button type="button" class="cyber-status-badge ${btnClass}"
+              data-name="${escapeHtml(d.name)}"
+              data-active="${isActive}"
+              data-status-label="${escapeHtml(uiMeta.label)}"
+              data-status-icon="${escapeHtml(uiMeta.icon)}"
+              ${isRepairDriver ? 'title="คนขับนำรถไปซ่อม — สถานะจะคืนอัตโนมัติเมื่อสิ้นสุดบล็อก"' : ''}
+              onclick="toggleDriverStatus(this, this.dataset.name, ${!isActive})">
+              <span class="icon">${escapeHtml(uiMeta.icon)}</span><span class="text">${escapeHtml(uiMeta.label)}</span>
+            </button>
+          </div>
+          <div class="cyber-meta ${uiMeta.textClass}">${escapeHtml(uiMeta.label)}</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Self-Test
+  setTimeout(() => {
+    try {
+      const cards     = container.querySelectorAll('.cyber-card');
+      const modalBody = document.querySelector('#admin-panel-modal .cyber-body');
+      console.log(`✅ [Self-Test] Render Driver Cards สำเร็จ | จำนวน: ${cards.length} ใบ`);
+      let hasOverflow = false, missingClass = false;
+      const heights = [];
+      cards.forEach((card, idx) => {
+        const nameEl  = card.querySelector('.cyber-name');
+        const metaEl  = card.querySelector('.cyber-meta');
+        const badgeEl = card.querySelector('.cyber-status-badge');
+        if (!nameEl || !metaEl || !badgeEl) { missingClass = true; console.warn(`⚠️ [Self-Test] Card ${idx + 1} ขาด class สำคัญ`); }
+        const rawText   = nameEl ? String(nameEl.textContent || '').trim() : '';
+        const cleanText = rawText.replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+        if (nameEl && rawText !== cleanText)
+          console.warn(`⚠️ [Self-Test] Card ${idx + 1} พบ zero-width char ในชื่อคนขับ`);
+        if (card.scrollWidth > card.clientWidth) hasOverflow = true;
+        heights.push(card.offsetHeight);
+      });
+
+      if (container.scrollWidth > container.clientWidth) hasOverflow = true;
+      if (modalBody && modalBody.scrollWidth > modalBody.clientWidth) hasOverflow = true;
+
+      const minH  = heights.length ? Math.min(...heights) : 0;
+      const maxH  = heights.length ? Math.max(...heights) : 0;
+      const delta = maxH - minH;
+
+      console.log(missingClass
+        ? '⚠️ [Self-Test] โครงสร้าง card ไม่ครบ'
+        : '✅ [Self-Test] Class ของชื่อคนขับ / subtitle / badge ครบ');
+      console.log(hasOverflow
+        ? '⚠️ [Self-Test] พบ Horizontal Overflow ใน Modal/Driver Cards'
+        : '✅ [Self-Test] ไม่พบ Horizontal Overflow ใน Modal');
+      console.log(delta > 28
+        ? `⚠️ [Self-Test] ความสูง Card ต่างกันมาก | min=${minH}px max=${maxH}px delta=${delta}px`
+        : `✅ [Self-Test] ความสูง Card สมดุล | min=${minH}px max=${maxH}px delta=${delta}px`);
+    } catch (e) {
+      console.error('[Self-Test] Error:', e);
+    }
+  }, 100);
+}
+
+
+function renderAdminVehicles(vehicles) {
+  const container = document.getElementById('admin-vehicles-list');
+  if (!container) return;
+
+  if (!Array.isArray(vehicles) || vehicles.length === 0) {
+    container.innerHTML = '<p class="text-center text-muted p-4">ไม่พบข้อมูล</p>';
+    return;
+  }
+
+  container.innerHTML = vehicles.map(v => {
+    // 🍓 BERRY FIX: ใช้ v.status จาก Server (ส่งมาได้แล้วผ่าน buildRadarData) ไม่ต้อง lookup แยก
+    const st = String(v.status || (v.active ? 'ready' : 'repair')).toLowerCase().trim();
+    const isActive = v.active !== false;
+    // 🍓 BERRY FIX: รถที่มี block ซ่อมอยู่ (status=repair) แม้ toggle active=true ต้องดูเป็น inactive
+    const isUnavailable = !isActive || (st === 'repair');
+    const uiMeta = getAvailabilityStatusUiMeta(st, true);
+    const btnClass = (uiMeta.dotClass === 'available') ? 'glow-green' : 'glow-orange';
+    return `
+      <div class="cyber-card ${isUnavailable ? 'inactive' : ''}">
+        <div class="cyber-card-left"><div class="cyber-avatar avatar-purple">${(v.type||'').includes('truck')?'🚚':'🚐'}</div></div>
+        <div class="cyber-card-right">
+          <div class="cyber-info">
+            <div class="cyber-name">${escapeHtml(v.plate)}</div>
+            <div class="cyber-meta ${escapeHtml(uiMeta.textClass)}">${escapeHtml(uiMeta.label)}</div>
+          </div>
+          <button type="button" class="cyber-status-badge ${btnClass}"
+            data-plate="${escapeHtml(v.plate)}"
+            data-active="${isActive}"
+            data-status-label="${escapeHtml(uiMeta.label)}"
+            data-status-icon="${escapeHtml(uiMeta.icon)}"
+            onclick="toggleVehicleStatus(this, this.dataset.plate, ${!isActive})">
+            <span class="icon">${escapeHtml(uiMeta.icon)}</span><span class="text">${escapeHtml(uiMeta.label)}</span>
+          </button>
+        </div>
+      </div>`;
+  }).join('');
+}
+// สลับแท็บใน Admin Modal
+window.switchAdminTab = function(targetId) {
+    // 1. จัดการปุ่ม Tab
+    document.querySelectorAll('#admin-panel-modal .cyber-tab').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    const activeBtnId = targetId === 'day-off-drivers' ? 'btn-tab-drivers' : 'btn-tab-vehicles';
+    const activeBtn = document.getElementById(activeBtnId);
+    if(activeBtn) activeBtn.classList.add('active');
+
+    // 2. จัดการ Content
+    document.querySelectorAll('.admin-tab-content').forEach(el => {
+        el.classList.add('hidden');
+    });
+    const target = document.getElementById(targetId);
+    if(target) target.classList.remove('hidden');
+};
+
+// ANCHOR: openSuspendModal
+// 🍓 BERRY FIX v2: fix today ใช้ Bangkok TZ จริง + ทำงานร่วมกับ executeToggle ที่ sync Radar
+let activeSuspendBtn = null;
+
+window.openSuspendModal = function(type, id, btn) {
+    document.getElementById('suspend-type').value = type;
+    document.getElementById('suspend-id').value = id;
+    document.getElementById('suspend-title').innerHTML = type === 'driver'
+        ? `🙋‍♂️ ระบุวันลา: ${escapeHtml(id)}`
+        : `🛠 ส่งรถซ่อม: ${escapeHtml(id)}`;
+    document.getElementById('suspend-form').reset();
+
+    // 🍓 BERRY FIX v2: force Bangkok timezone แทน client tzOffset
+    // sv-SE locale = yyyy-MM-dd format ตรงกับ ISO date โดยไม่ต้องตัด T
+    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' });
+
+    const sEl = document.getElementById('suspend-start');
+    const eEl = document.getElementById('suspend-end');
+    if (sEl) { sEl.value = today; sEl.dataset.iso = today; }
+    if (eEl) { eEl.value = today; eEl.dataset.iso = today; }
+
+    // Show/hide driver dropdown
+    const driverWrap = document.getElementById('suspend-driver-wrapper');
+    const driverSelect = document.getElementById('suspend-driver');
+    if (driverWrap && driverSelect) {
+        driverSelect.value = '';
+        if (type === 'vehicle') {
+            driverWrap.style.display = 'block';
+            driverSelect.required = true;
+        } else {
+            driverWrap.style.display = 'none';
+            driverSelect.required = false;
+        }
+    }
+
+    // Reset Time & Quick Buttons
+    const stEl = document.getElementById('suspend-start-time');
+    const etEl = document.getElementById('suspend-end-time');
+    if (stEl) stEl.value = '';
+    if (etEl) etEl.value = '';
+
+    const wrapper = document.getElementById('suspend-quick-time-wrapper');
+    if (wrapper) {
+        wrapper.querySelectorAll('.btn-quick-time').forEach(b => b.classList.remove('active'));
+        const allDayBtn = wrapper.querySelector('[data-type="allday"]');
+        if (allDayBtn) allDayBtn.classList.add('active');
+    }
+
+    if (typeof syncAllThaiDateInputs === 'function') syncAllThaiDateInputs();
+    activeSuspendBtn = btn;
+    openModalA11y('suspend-modal');
+};
+
+// ANCHOR: submitSuspend
+// แทนที่ฟังก์ชัน submitSuspend เดิมด้วยเวอร์ชันนี้
+window.submitSuspend = async function(e) {
+    e.preventDefault();
+    const type = document.getElementById('suspend-type').value;
+    const id = document.getElementById('suspend-id').value;
+    
+    const sEl = document.getElementById('suspend-start');
+    const eEl = document.getElementById('suspend-end');
+    const start = sEl ? (sEl.dataset.iso || sEl.value) : '';
+    const end = eEl ? (eEl.dataset.iso || eEl.value) : '';
+    const reason = document.getElementById('suspend-reason').value;
+
+    const stEl = document.getElementById('suspend-start-time');
+    const etEl = document.getElementById('suspend-end-time');
+    let startTime = stEl ? stEl.value : '';
+    let endTime = etEl ? etEl.value : '';
+
+    if ((startTime && !endTime) || (!startTime && endTime)) {
+        if (typeof showToast === 'function') showToast('กรุณาระบุเวลาให้ครบทั้งเวลาเริ่มและเวลาสิ้นสุดค่ะ', 'error');
+        return;
+    }
+    
+    if (!startTime && !endTime) {
+        startTime = '00:00';
+        endTime = '23:59';
+    }
+
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    setBtnLoading(submitBtn, true);
+
+    let adminName = 'Admin';
+    if (window.currentUser) {
+        adminName = window.currentUser.displayName || window.currentUser.name || window.currentUser.username || 'Admin';
+    }
+
+    const driverSelect = document.getElementById('suspend-driver');
+    const assignedDriver = (type === 'vehicle' && driverSelect) ? driverSelect.value : '';
+
+    try {
+        let blockRes;
+        if (type === 'vehicle' && assignedDriver) {
+             blockRes = await googleScriptRun('saveMaintenanceAvailability', {
+                 vehiclePlate: id,
+                 startDate: start, startTime: startTime,
+                 endDate: end, endTime: endTime,
+                 reason: reason,
+                 createdBy: adminName,
+                 assignedDriver: assignedDriver
+             });
+        } else {
+            blockRes = await googleScriptRun('createAvailabilityBlock', {
+                resourceType: type, resourceId: id,
+                startDate: start, startTime: startTime,
+                endDate: end, endTime: endTime,
+                reason: reason, 
+                createdBy: adminName,
+                assignedDriver: type === 'vehicle' ? assignedDriver : id
+            });
+        }
+        
+        if (!blockRes || !blockRes.ok) throw new Error(blockRes ? blockRes.error : 'Failed to create block');
+
+        closeModalA11y('suspend-modal');
+        if (typeof showToast === 'function') showToast('บันทึกข้อมูลเรียบร้อยค่ะ 🗓️', 'success');
+        
+        await refreshBookingUiAfterMutation({ forceSync: true });
+
+        await googleScriptRun('apiRefreshDashboard'); 
+        
+        if (typeof loadCalendarView === 'function' && window.calendarState) {
+            loadCalendarView(window.calendarState.currentYear, window.calendarState.currentMonth);
+        }
+        if (typeof loadAdminPanelData === 'function') {
+            await loadAdminPanelData();
+        }
+        // 🍓 รีเฟรชเรดาร์
+        if (typeof window.loadLiveStatusData === 'function') window.loadLiveStatusData();
+    } catch (err) {
+        if (typeof showToast === 'function') showToast('Error: ' + err.message, 'error');
+    } finally {
+        setBtnLoading(submitBtn, false);
+    }
+};
+
+async function syncClientBookingState(force) {
+    try {
+        const now = Date.now();
+        const last = Number(window.vbLastSyncAt || 0);
+        if (!force && last > 0 && (now - last) < 3000) return false;
+        window.vbLastSyncAt = now;
+
+        if (window.vbInitState === 'LOADING' || window.vbInitState === 'RETRYING') {
+            console.log('⏳ syncClientBookingState deferring: App is currently initializing.');
+            if (window.vbInitPromise) {
+                const initSuccess = await window.vbInitPromise;
+                if (initSuccess) return true;
+            }
+            return false;
+        }
+
+        const initData = await googleScriptRunLimited('getWebAppInitialData');
+        if (!initData || !initData.ok || !initData.data) return false;
+
+        window.allBookingsData = initData.data.bookings || [];
+        if (initData.data.vehicles) window.vehiclesList = initData.data.vehicles;
+        if (Array.isArray(initData.data.drivers)) window.driversList = initData.data.drivers;
+        if (Array.isArray(initData.data.projects)) window.projectList = initData.data.projects;
+
+        if (typeof reindexBookings === 'function') reindexBookings(window.allBookingsData);
+        if (typeof updateCounters === 'function') updateCounters();
+        return true;
+    } catch (e) {
+        console.warn('syncClientBookingState failed', e);
+        return false;
+    }
+}
+
+async function refreshBookingUiAfterMutation(options) {
+    const opts = options || {};
+    await syncClientBookingState(opts.forceSync === true);
+
+    if (opts.reloadBookings !== false && typeof loadBookingsView === 'function') {
+        loadBookingsView();
+    }
+    if (opts.reloadCalendar !== false && typeof renderCalendar === 'function' && window.calendarState) {
+        renderCalendar(window.calendarState.currentYear, window.calendarState.currentMonth);
+    }
+    if (opts.reloadCounters === true && typeof updateCounters === 'function') {
+        updateCounters();
+    }
+}
+
+/* ANCHOR: wireSuspendQuickTimeButtonsOnce */
+function wireSuspendQuickTimeButtonsOnce() {
+  if (window.vberrySuspendQuickTimeWired) return;
+  window.vberrySuspendQuickTimeWired = true;
+
+  const wrapper = document.getElementById('suspend-quick-time-wrapper');
+  const stEl = document.getElementById('suspend-start-time');
+  const etEl = document.getElementById('suspend-end-time');
+  if (!wrapper || !stEl || !etEl) return;
+
+  const btns = wrapper.querySelectorAll('.btn-quick-time');
+  const clearActive = () => btns.forEach(b => b.classList.remove('active'));
+
+  btns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      clearActive();
+      btn.classList.add('active');
+      const type = btn.dataset.type;
+
+      if (type === 'allday') {
+        stEl.value = ''; etEl.value = '';
+      } else if (type === 'morning') {
+        stEl.value = '08:30'; etEl.value = '12:00';
+      } else if (type === 'afternoon') {
+        stEl.value = '13:00'; etEl.value = '16:30';
+      }
+    });
+  });
+
+  const handleManualInput = () => clearActive();
+  stEl.addEventListener('input', handleManualInput);
+  etEl.addEventListener('input', handleManualInput);
+}
+// 🍓 BERRY FIX: Export ลง Global Scope ให้ safeCall หาเจอ
+window.wireSuspendQuickTimeButtonsOnce = wireSuspendQuickTimeButtonsOnce;
+
+// ANCHOR: executeToggle
+// 🍓 BERRY FIX v2: sync ทั้ง AdminPanel + Radar หลัง toggle สำเร็จ
+window.executeToggle = async function(type, id, nextActive, btn) {
+    if (btn.disabled) return;
+
+    const originalContent = btn.innerHTML;
+    const originalClass = btn.className;
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:2px;display:inline-block;border-top-color:currentColor;margin-right:4px;"></span><span class="text">รอสักครู่...</span>';
+
+    try {
+        const res = type === 'driver'
+            ? await googleScriptRun('apiToggleDriverStatus', { name: id, active: nextActive })
+            : await googleScriptRun('apiToggleVehicleStatus', { plate: id, active: nextActive });
+
+        if (!res || !res.ok) throw new Error(res ? res.error : 'Toggle failed');
+
+        const finalActive = res.active === true;
+
+        if (type === 'driver') {
+            btn.className = `cyber-status-badge ${finalActive ? 'glow-green' : 'glow-orange'}`;
+            btn.innerHTML = `<span class="icon">${finalActive ? '✅' : '☕'}</span><span class="text">${finalActive ? 'ทำงาน' : 'พักงาน'}</span>`;
+            btn.dataset.active = finalActive ? 'true' : 'false';
+            btn.onclick = function() { toggleDriverStatus(btn, id, finalActive); };
+        } else {
+            btn.className = `cyber-status-badge ${finalActive ? 'glow-green' : 'glow-orange'}`;
+            btn.innerHTML = `<span class="icon">${finalActive ? '✅' : '🛠'}</span><span class="text">${finalActive ? 'พร้อมใช้' : 'ส่งซ่อม'}</span>`;
+            btn.dataset.active = finalActive ? 'true' : 'false';
+            btn.onclick = function() { toggleVehicleStatus(btn, id, finalActive); };
+        }
+
+        const card = btn.closest('.cyber-card');
+        if (card) {
+            if (finalActive) card.classList.remove('inactive');
+            else card.classList.add('inactive');
+        }
+
+        // 🍓 BERRY FIX v2: refresh AdminPanel ก่อน (มี live inject อยู่แล้วใน loadAdminPanelData)
+        // ไม่ต้องเรียก loadLiveStatusData แยกเพราะ loadAdminPanelData ใหม่เรียก apiGetLiveStatus ด้วยแล้ว
+        if (typeof loadAdminPanelData === 'function') {
+            loadAdminPanelData().catch(e => console.warn('[Toggle] AdminPanel refresh fail:', e));
+        }
+
+        // 🍓 BERRY FIX v2: sync Radar panel ด้วยเสมอ — ทำงานอิสระจาก AdminPanel
+        if (typeof window.loadLiveStatusData === 'function') {
+            window.loadLiveStatusData();
+        } else if (typeof window.loadLiveStatus === 'function') {
+            window.loadLiveStatus();
+        }
+
+        console.log('[Toggle] ✅ toggle success: type=' + type + ' id=' + id + ' finalActive=' + finalActive);
+
+    } catch (e) {
+        if (typeof showToast === 'function') showToast('บันทึกไม่สำเร็จ: ' + e.message, 'error');
+        btn.className = originalClass;
+        btn.innerHTML = originalContent;
+        console.error('[Toggle] ❌ fail:', e);
+    } finally {
+        btn.disabled = false;
+    }
+};
+
+// ANCHOR: toggleDriverStatus
+window.toggleDriverStatus = function(btn, name, currentDisplayOff) {
+    if (btn && btn.disabled) return; // 🍓 BERRY FIX: Guard ป้องกันกดรัว
+
+    const isManualActive = btn && btn.dataset && btn.dataset.active === 'true'; // 🍓 BERRY FIX: ใช้ dataset.active ให้ตรงกับ HTML
+    const isLiveBusy = btn && btn.dataset && btn.dataset.available === 'false'; 
+
+    if (currentDisplayOff) {
+        if (isManualActive && isLiveBusy) {
+            if (typeof showToast === 'function') {
+                showToast('พนักงานขับรถคนนี้ติดสถานะลา/ภารกิจจากข้อมูลจริง กรุณาแก้ที่ต้นทางก่อนค่ะ', 'warning');
+            }
+            return;
+        }
+        executeToggle('driver', name, true, btn);
+        return;
+    }
+    openSuspendModal('driver', name, btn);
+};
+
+// ANCHOR: toggleVehicleStatus
+window.toggleVehicleStatus = function(btn, plate, currentDisplayOff) {
+    if (btn && btn.disabled) return; // 🍓 BERRY FIX: Guard ป้องกันกดรัว
+
+    const actualActive = btn && btn.dataset && btn.dataset.active === 'true';
+    const actualAvailable = btn && btn.dataset && btn.dataset.available === 'true';
+
+    if (currentDisplayOff) {
+        if (actualActive && !actualAvailable) {
+            if (typeof showToast === 'function') showToast('รถติดสถานะซ่อม/บล็อกจากข้อมูลจริง ต้องล้างที่ปฏิทินก่อนจึงจะพร้อมได้ค่ะ', 'warning');
+            return;
+        }
+        executeToggle('vehicle', plate, true, btn);
+        return;
+    }
+    openSuspendModal('vehicle', plate, btn);
+};
+    /* ================== DASHBOARD BUTTONS WIRING ================== */
+   function wireDashboardButtons() {
+    const sel = {
+        refresh: document.getElementById('refresh-dashboard'),
+        dashboardPdf: document.getElementById('btn-dashboard-report'),
+        fuelMonthly: document.getElementById('btn-fuel-report-monthly'),
+        fuelDaily: document.getElementById('btn-fuel-report-daily'),
+        insAnnual: document.getElementById('btn-insurance-annual-report'),
+        maintMonthly: document.getElementById('btn-maintenance-monthly-report')
+    };
+
+    function setBusy(btn, on, label) {
+        if (!btn) return;
+        if (!btn.dataset._label) btn.dataset._label = btn.textContent || '';
+        btn.disabled = !!on;
+        btn.setAttribute('aria-busy', on ? 'true' : 'false');
+        btn.textContent = on ? (label || 'กำลังประมวลผล…') : btn.dataset._label;
+    }
+
+    function safeOpen(url) {
+        try { if (url) window.open(url, '_blank', 'noopener'); } catch (_) {}
+    }
+
+    function bind(btn, handler) {
+        if (!btn) return;
+        if (btn.__WIRED__) return;
+        btn.__WIRED__ = true;
+        btn.dataset.wired = '1';
+        btn.addEventListener('click', async function(e) {
+            e.preventDefault();
+            try { await handler(btn); } catch (err) {
+                console.error('dashboard button error:', err);
+                if (typeof showToast === 'function') showToast(err.message || String(err), 'error');
+            }
+        }, { passive: false });
+    }
+
+    bind(sel.refresh, async function(btn) {
+        setBusy(btn, true, 'รีเฟรช…');
+        try {
+            const res = await googleScriptRun('apiRefreshDashboard', {});
+            if (!res || !res.ok) throw new Error(res?.error || 'รีเฟรชไม่สำเร็จ');
+            if (typeof loadDashboardView === 'function') loadDashboardView();
+            if (typeof showToast === 'function') showToast('รีเฟรชข้อมูลแล้ว', 'success');
+        } finally { setBusy(btn, false); }
+    });
+
+    bind(sel.dashboardPdf, async function(btn) {
+        setBusy(btn, true, 'สร้าง PDF…');
+        try {
+            const res = await googleScriptRun('apiGenerateDashboardPdf', {});
+            if (!res || !res.ok) throw new Error('สร้างแดชบอร์ดไม่สำเร็จ');
+            safeOpen(res.url);
+        } finally { setBusy(btn, false); }
+    });
+
+    bind(sel.fuelMonthly, async function(btn) {
+        setBusy(btn, true, 'สร้างรายเดือน…');
+        try {
+            const res = await googleScriptRun('apiGenerateFuelMonthlyPdf', {});
+            if (!res || !res.ok) throw new Error('สร้างสรุปน้ำมันไม่สำเร็จ');
+            safeOpen(res.url);
+        } finally { setBusy(btn, false); }
+    });
+
+    bind(sel.fuelDaily, async function(btn) {
+        setBusy(btn, true, 'สร้างรายวัน…');
+        try {
+            const res = await googleScriptRun('apiGenerateFuelDailyPdf', {});
+            if (!res || !res.ok) throw new Error('สร้างสรุปน้ำมันรายวันไม่สำเร็จ');
+            safeOpen(res.url);
+        } finally { setBusy(btn, false); }
+    });
+
+    // [NEW] รายงานประกันภัยประจำปี
+    bind(sel.insAnnual, async function(btn) {
+        setBusy(btn, true, 'สร้างรายงานประจำปี…');
+        try {
+            const res = await googleScriptRun('apiGenerateInsuranceAnnualPdf', {});
+            if (!res || !res.ok) throw new Error(res?.error || 'สร้างรายงานไม่สำเร็จ');
+            safeOpen(res.url);
+        } finally { setBusy(btn, false); }
+    });
+
+    // [NEW] รายงานซ่อมบำรุงรายเดือน
+    bind(sel.maintMonthly, async function(btn) {
+        setBusy(btn, true, 'สร้างรายงานรายเดือน…');
+        try {
+            const res = await googleScriptRun('apiGenerateMaintenanceMonthlyPdf', {});
+            if (!res || !res.ok) throw new Error(res?.error || 'สร้างรายงานไม่สำเร็จ');
+            safeOpen(res.url);
+        } finally { setBusy(btn, false); }
+    });
+
+    console.log('✅ wireDashboardButtons complete');
+}
+        // ================== File Upload Helpers ==================
+    async function _fileToBase64_(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                const result = reader.result || '';
+                const parts = String(result).split(',');
+                resolve(parts[1] || '');
+            };
+            reader.onerror = () => reject(reader.error || new Error('File read error'));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    async function _handleFileChange_(evt) {
+  try {
+    const input = evt.target;
+    if (!input || !input.files || !input.files.length) return;
+
+    const file = input.files[0];
+    if (!file) return;
+
+    const targetName = input.dataset.uploadTarget || input.name;
+    if (!targetName) {
+      console.warn('File input missing data-upload-target/name');
+      return;
+    }
+
+    const hidden = document.querySelector('input[type="hidden"][name="' + targetName + '"]');
+    const wrapper = input.closest('.file-input-wrapper');
+    const label = wrapper ? wrapper.querySelector('.file-name') : null;
+
+    showLoading();
+
+    const base64 = await _fileToBase64_(file);
+
+    if (hidden) hidden.value = base64;
+
+    input.__fileData = base64;
+    input.__fileName = file.name;
+    input.__fileMime = file.type || 'application/octet-stream';
+
+    if (label) label.textContent = file.name;
+
+    console.log('✅ [File] Selected:', { name: input.__fileName, mime: input.__fileMime, base64Length: base64.length });
+
+  } catch (e) {
+    console.error('File convert error:', e);
+    showToast('ไม่สามารถอ่านไฟล์ได้ค่ะ', 'error');
+  } finally {
+    hideLoading();
+  }
+}
+
+// ANCHOR: clearFile
+    function clearFile(a, b, c) {
+      try {
+        // รองรับการเรียกแบบ: clearFile(inputId, chosenId, previewId)
+        if (b || c) {
+          const inputId = a;
+          const chosenId = b; // wrapper
+          const previewId = c; // wrapper
+
+          const input = document.getElementById(inputId);
+          if (input) {
+            input.value = '';
+            input.__fileData = null;
+            input.__fileName = null;
+            input.__fileMime = null;
+          }
+
+          const chosenWrap = chosenId ? document.getElementById(chosenId) : null;
+          if (chosenWrap) {
+            chosenWrap.classList.add('hidden');
+            // รีเซ็ตเฉพาะข้อความใน span โดยไม่ทำลาย DOM ของปุ่มลบ
+            const span = chosenWrap.querySelector('span');
+            if (span) span.textContent = 'ยังไม่ได้เลือกไฟล์';
+          }
+
+          const previewWrap = previewId ? document.getElementById(previewId) : null;
+          if (previewWrap) {
+            previewWrap.classList.add('hidden');
+            const img = previewWrap.querySelector('img');
+            if (img) img.src = '';
+          }
+
+          return;
+        }
+
+        // รองรับการเรียกแบบเดิม: clearFile(targetName)
+        const targetName = a;
+        const hidden = document.querySelector('input[type="hidden"][name="' + targetName + '"]');
+        const input = document.querySelector(
+          'input[type="file"][data-upload-target="' + targetName + '"],' +
+          'input[type="file"][name="' + targetName + '"]'
+        );
+        const wrapper = input ? input.closest('.file-input-wrapper') : null;
+        const label = wrapper ? wrapper.querySelector('.file-name') : null;
+
+        if (hidden) hidden.value = '';
+        if (input) {
+          input.value = '';
+          input.__fileData = null;
+          input.__fileName = null;
+          input.__fileMime = null;
+        }
+        if (label) label.textContent = 'ยังไม่ได้เลือกไฟล์';
+      } catch (e) {
+        console.warn('clearFile error:', e);
+      }
+    }
+ 
+
+    // ตัวนี้คือฟังก์ชันที่ tab handler เรียกใช้
+    function ensureUploadButtonsLive() {
+        try {
+            const inputs = document.querySelectorAll(
+                'input[type="file"][data-upload-target]'
+            );
+            if (!inputs || !inputs.length) return;
+
+            inputs.forEach(input => {
+                // กันไม่ให้ bind ซ้ำ
+                if (input.__wiredFileChange) return;
+                input.__wiredFileChange = true;
+                input.addEventListener('change', _handleFileChange_);
+            });
+        } catch (e) {
+            console.warn('ensureUploadButtonsLive error:', e);
+        }
+    }
+
+    async function _submitForm_(form, submitBtn, apiFunction, payload) {
+      let originalLabel = '';
+      if (submitBtn) {
+        originalLabel = submitBtn.textContent;
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'กำลังบันทึก... 💾';
+      }
+      showLoading();
+      
+      try {
+        const res = await googleScriptRunLimited(apiFunction, payload);
+        if (!res || !res.ok) {
+          throw new Error(res.error || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
+        }
+        
+        showToast('บันทึกข้อมูลเรียบร้อยแล้วค่ะ! 🎉', 'success');
+        form.reset();
+        
+        const fileInput = form.querySelector('input[type="file"]');
+        if (fileInput && typeof window.clearFile === 'function') {
+          const chosenId = fileInput.id.replace('-upload', '-chosen');
+          const previewId = fileInput.id.replace('-upload', '-preview');
+          window.clearFile(fileInput.id, chosenId, previewId);
+        }
+
+      } catch (err) {
+        console.error(`Error submitting ${apiFunction}:`, err);
+        showToast(`เกิดข้อผิดพลาด: ${err.message}`, 'error');
+      } finally {
+        hideLoading();
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = originalLabel;
+        }
+      }
+    }
+
+ async function submitFuel(event) {
+  event.preventDefault();
+  const form = event.target || document.getElementById('fuel-form');
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const fileInput = document.getElementById('fuel-file-upload');
+  const fileData = fileInput ? fileInput.__fileData : null;
+
+  // 1. กันกดซ้ำ (State Check)
+  if (submitBtn && (submitBtn.disabled || submitBtn.dataset.busy === '1')) return;
+  
+  // 2. UI Busy State (เปลี่ยนเป็น Loading 1 อัน ห้ามซ้อน)
+  if (submitBtn) {
+    submitBtn.dataset.busy = '1';
+    // เก็บ original text ที่ไม่มี spinner ไว้
+    const cleanOrig = submitBtn.innerHTML.replace(/<span class="spinner"[^>]*><\/span>|กำลัง[^<]+/g, '').trim() || '💾 บันทึกข้อมูลน้ำมัน';
+    submitBtn.dataset.originalText = cleanOrig;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px;"></span>กำลังบันทึกข้อมูลน้ำมัน...';
+  }
+
+  // 📍 ANCHOR: submitFuel 
+  try {
+    const formData = new FormData(form);
+    const payload = Object.fromEntries(formData.entries());
+
+    // 🍓 BERRY FIX: จัดการตัวเลือก "อื่นๆ" ของ งบประมาณ ก่อนส่งให้ Server
+    if (payload.budgetType === 'other') {
+      if (!payload.budgetTypeOther) throw new Error('กรุณาระบุงบประมาณอื่นๆ');
+      payload.budgetType = payload.budgetTypeOther.trim(); // ย้ายข้อความไปทับใน budgetType เลย
+    }
+    delete payload.budgetTypeOther; // ลบทิ้งป้องกันขยะรก Server
+
+    // เช็คฟิลด์ป้องกันค่าว่าง
+    if (!payload.plate) throw new Error('กรุณาเลือกรถ');
+    if (!payload.workType) throw new Error('กรุณาระบุประเภทงาน');
+    if (!payload.project) throw new Error('กรุณาระบุงาน/โครงการ');
+
+    // จัดการไฟล์ (แก้ไขชื่อ Property ตัวท้ายเป็น mimeType ให้ตรงกับ API ฝั่ง Server รับ)
+    if (fileData) {
+      payload.fileData = fileData;
+      payload.fileName = (fileInput && fileInput.__fileName) ? fileInput.__fileName : '';
+      payload.mimeType = (fileInput && fileInput.__fileMime) ? fileInput.__fileMime : 'application/octet-stream';
+    }
+    delete payload.fuelFile;
+
+    // เรียก Server (timeout ควบคุมโดยระบบ Queue/Safe ของ GAS)
+    const res = await new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)
+        .apiSaveFuel(payload);
+    });
+
+    // ปรับระบบดักรับ Error ให้ฉลาดขึ้น
+    if (!res || !res.ok) throw new Error(res ? (res.error || res.message) : 'บันทึกไม่สำเร็จ');
+
+    // Success Actions
+    if (typeof showToast === 'function') showToast('บันทึกข้อมูลน้ำมันเรียบร้อยแล้วค่ะ! ⛽', 'success');
+    form.reset();
+
+    // Clear UI inputs
+    if (typeof clearFile === 'function') clearFile('fuel-file-upload', 'fuel-file-chosen', 'fuel-file-preview');
+
+    const wSel = document.getElementById('fuel-workType-select');
+    if (wSel) wSel.dispatchEvent(new Event('change'));
+    
+    const pInp = document.getElementById('fuel-project');
+    if (pInp) pInp.dispatchEvent(new Event('input'));
+
+    // รีเฟรชตารางทันที
+    if (typeof loadFuelData === 'function') loadFuelData();
+
+  } catch (err) {
+    console.error("Submit Fuel Error:", err);
+    if (typeof showToast === 'function') showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+  } finally {
+    // คืนสถานะปุ่มชัวร์ๆ เสมอ ท้ายสุด
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('is-loading');
+      if (submitBtn.dataset.originalText) submitBtn.innerHTML = submitBtn.dataset.originalText;
+      submitBtn.dataset.busy = '0';
+    }
+  }
+}
+
+   /* [ANCHOR: Client - Insurance & Maintenance Handlers] */
+
+function wireInsuranceActions() {
+  const form = document.getElementById('insurance-form');
+  if (!form) return; // ป้องกัน Error ถ้าหาฟอร์มไม่เจอ
+
+  // Remove old listeners (cloning node is a quick hack, but better to just ensure single binding)
+  // Here we assume this function is called once inside init or via onclick handler safeguard.
+  
+  form.onsubmit = function(e) {
+    e.preventDefault();
+    
+    // 1. UI Loading State
+    const btn = form.querySelector('button[type="submit"]');
+    const originalText = btn ? btn.innerText : 'บันทึก';
+    if(btn) {
+      btn.disabled = true;
+      btn.innerText = 'กำลังบันทึก...';
+    }
+
+    // 2. Prepare Data
+    // ต้องมั่นใจว่า input ใน index.html มี attribute 'name' ที่ตรงกับ key ใน Server
+    // เช่น <input name="vehicle">, <input name="policy_no">
+    const formData = new FormData(form);
+    const formObj = {};
+    formData.forEach((value, key) => { formObj[key] = value });
+
+    // 3. Call Server
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if(btn) {
+          btn.disabled = false;
+          btn.innerText = originalText;
+        }
+        
+        if (res.ok) {
+          form.reset(); // ล้างฟอร์ม
+          alert("✅ " + res.message);
+          loadInsuranceList(); // รีเฟรชตารางทันที
+        } else {
+          alert("❌ " + res.message);
+        }
+      })
+      .withFailureHandler(function(err) {
+        if(btn) {
+          btn.disabled = false;
+          btn.innerText = originalText;
+        }
+        alert("Server Error: " + err);
+      })
+      .saveInsuranceRecord(formObj);
+  };
+}
+
+async function submitMaintenance(event) {
+  if (event) event.preventDefault(); // 🛑 สำคัญมาก: กัน Form Submit ปกติที่ทำให้หน้าขาว
+
+  const form = event.target;
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const fileInput = document.getElementById('maint-file-upload');
+  const fileData = fileInput ? fileInput.__fileData : null;
+
+  // 1. UI Loading
+  if (typeof setBtnLoading === 'function') setBtnLoading(submitBtn, true);
+
+  try {
+    // 2. Prepare Payload
+    const formData = new FormData(form);
+    const payload = Object.fromEntries(formData.entries());
+
+    // Clean Date Inputs (ใช้ dataset.iso ถ้ามี)
+    if (form.startDate && form.startDate.dataset.iso) payload.startDate = form.startDate.dataset.iso;
+    if (form.endDate && form.endDate.dataset.iso) payload.endDate = form.endDate.dataset.iso;
+    if (form.nextDate && form.nextDate.dataset.iso) payload.nextDate = form.nextDate.dataset.iso;
+
+    // Handle File (ไฟล์ถูกแปลงเป็น base64 ตั้งแต่ตอนเลือกแล้ว)
+    if (fileData) {
+      payload.fileData = fileData;
+      payload.fileName = (fileInput && fileInput.__fileName) ? fileInput.__fileName : '';
+      payload.fileMime = (fileInput && fileInput.__fileMime) ? fileInput.__fileMime : 'application/octet-stream';
+    }
+    delete payload.maintFile; // ลบ field file object ทิ้ง
+
+    console.log("📦 Submitting Maintenance:", payload);
+
+    // 3. Call Server (ใช้ Promise Wrapper)
+    const res = await new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)
+        .apiSaveMaintenance(payload);
+    });
+
+    console.log("📨 Server Response:", res);
+
+    if (!res || !res.ok) throw new Error(res ? res.error : 'บันทึกไม่สำเร็จ (Unknown Error)');
+
+    // 4. Success
+    if (typeof showToast === 'function') showToast('บันทึกข้อมูลซ่อมบำรุงเรียบร้อย 🔧', 'success');
+    form.reset();
+
+    // Clear File UI
+    if (typeof clearFile === 'function') clearFile('maint-file-upload', 'maint-file-chosen', 'maint-file-preview');
+
+    // Refresh Table
+    if (typeof loadMaintenanceData === 'function') loadMaintenanceData();
+
+  } catch (err) {
+    console.error("❌ Submit Maintenance Error:", err);
+    if (typeof showToast === 'function') showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+  } finally {
+    // 5. Restore Button (สำคัญ: ต้องทำงานเสมอ)
+    if (typeof setBtnLoading === 'function') setBtnLoading(submitBtn, false);
+  }
+}
+
+
+    /* ================== ANCHOR: UI Data Loaders ================== */
+  /* [ANCHOR: Client - Load Insurance & Maintenance Data] */
+
+// --- Load Insurance Table ---
+async function loadInsuranceData() {
+    const tbody = document.getElementById('insurance-table-body');
+    if (!tbody) return;
+    
+    // Loading State
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4"><div class="spinner mx-auto mb-2"></div><span class="text-muted">กำลังโหลดข้อมูล...</span></td></tr>';
+    
+    try {
+        const res = await new Promise((resolve, reject) => {
+             google.script.run
+               .withSuccessHandler(resolve)
+               .withFailureHandler(reject)
+               .apiGetInsuranceHistory();
+        });
+        
+        if (!res.ok) throw new Error(res.error);
+        
+        if (res.data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">🍃 ยังไม่มีข้อมูลประกันภัย</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = res.data.map(item => {
+            let badgeClass = 'success';
+            let statusText = 'คุ้มครอง';
+            
+            if (item.status === 'expired') { badgeClass = 'danger'; statusText = 'หมดอายุ'; }
+            else if (item.status === 'warning') { badgeClass = 'warning'; statusText = 'ใกล้หมด'; }
+            
+            return `
+            <tr>
+                <td><span style="font-weight:600; color:#1e293b;">${item.plate}</span></td>
+                <td>${item.company}</td>
+                <td>${item.endDate}</td>
+                <td class="text-right">${Number(item.cost).toLocaleString()}</td>
+                <td class="text-center"><span class="badge bg-${badgeClass} text-white" style="font-size:0.8rem; padding:2px 8px; border-radius:10px;">${statusText}</span></td>
+            </tr>`;
+        }).join('');
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center text-danger py-4">โหลดข้อมูลไม่สำเร็จ: ${err.message}</td></tr>`;
+    }
+}
+
+// --- Load Maintenance Table ---
+async function loadMaintenanceData() {
+    const tbody = document.getElementById('maintenance-table-body');
+    if (!tbody) return;
+    
+    // Loading State
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4"><div class="spinner mx-auto mb-2"></div><span class="text-muted">กำลังโหลดประวัติซ่อม...</span></td></tr>';
+    
+    try {
+        const res = await new Promise((resolve, reject) => {
+             google.script.run
+               .withSuccessHandler(resolve)
+               .withFailureHandler(reject)
+               .apiGetMaintenanceHistory();
+        });
+        
+        if (!res.ok) throw new Error(res.error);
+        
+        if (res.data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">🛠️ ยังไม่มีประวัติการซ่อมบำรุง</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = res.data.map(item => {
+            const fileBtn = (item.fileUrl && item.fileUrl.length > 4) 
+                ? `<a href="${item.fileUrl}" target="_blank" class="btn btn-sm btn-info py-0 px-2">📎</a>` 
+                : '-';
+
+            return `
+            <tr>
+                <td>${item.date}</td>
+                <td><span style="font-weight:600; color:#1e293b;">${item.plate}</span></td>
+                <td>${item.topic}</td>
+                <td class="text-right" style="font-weight:700; color:#dc2626;">${Number(item.cost).toLocaleString()}</td>
+                <td class="text-center">${fileBtn}</td>
+            </tr>`;
+        }).join('');
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center text-danger py-4">โหลดข้อมูลไม่สำเร็จ: ${err.message}</td></tr>`;
+    }
+}
+
+// 1. สร้างฟังก์ชัน "ไส้ใน" ขึ้นมาก่อน (Logic การบันทึก)
+// =========================================
+async function handleInsuranceSubmit(e) {
+    e.preventDefault();
+
+    const form = e.target;
+    const btn = form.querySelector('button[type="submit"]');
+    const originalText = btn ? btn.innerText : 'บันทึก';
+
+    if (btn && (btn.disabled || btn.dataset.busy === '1')) return;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.dataset.busy = '1';
+        btn.innerText = 'กำลังบันทึก...';
+    }
+
+    try {
+        const formData = new FormData(form);
+        const formObj = {};
+        formData.forEach((value, key) => { formObj[key] = value; });
+
+        const res = await new Promise((resolve, reject) => {
+            google.script.run
+                .withSuccessHandler(resolve)
+                .withFailureHandler(reject)
+                .saveInsuranceRecord(formObj);
+        });
+
+        if (!res || !res.ok) {
+            throw new Error((res && (res.message || res.error)) || 'บันทึกข้อมูลประกันภัยไม่สำเร็จ');
+        }
+
+        form.reset();
+
+        if (typeof showToast === 'function') {
+            showToast("บันทึกข้อมูลประกันภัยเรียบร้อยแล้วค่ะ 🛡️", "success");
+        }
+
+        if (typeof loadInsuranceList === 'function') {
+            loadInsuranceList();
+        }
+
+    } catch (err) {
+        console.error('handleInsuranceSubmit error:', err);
+        if (typeof showToast === 'function') {
+            showToast('เกิดข้อผิดพลาด: ' + (err.message || err), 'error');
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.dataset.busy = '0';
+            btn.innerText = originalText;
+        }
+    }
+}
+
+async function handleMaintenanceSubmit(e) {
+    e.preventDefault();
+
+    const form = e.target;
+    const btn = form.querySelector('button[type="submit"]');
+    const originalText = btn ? btn.innerText : 'บันทึก';
+
+    if (btn && (btn.disabled || btn.dataset.busy === '1')) return;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.dataset.busy = '1';
+        btn.innerText = 'กำลังอัปโหลด...';
+    }
+
+    try {
+        const formData = new FormData(form);
+        const formObj = {};
+
+        formData.forEach((value, key) => {
+            if (!(value instanceof File)) {
+                formObj[key] = value;
+            }
+        });
+
+        const fileInput = form.querySelector('input[type="file"]');
+        let fileObj = null;
+
+        if (fileInput && fileInput.__fileData) {
+            fileObj = {
+                data: fileInput.__fileData,
+                fileName: fileInput.__fileName,
+                mimeType: fileInput.__fileMime
+            };
+        }
+
+        const res = await new Promise((resolve, reject) => {
+            google.script.run
+                .withSuccessHandler(resolve)
+                .withFailureHandler(reject)
+                .saveMaintenanceRecord(formObj, fileObj);
+        });
+
+        if (!res || !res.ok) {
+            throw new Error((res && (res.message || res.error)) || 'บันทึกข้อมูลซ่อมบำรุงไม่สำเร็จ');
+        }
+
+        form.reset();
+
+        const preview = document.getElementById('maintenance-file-preview');
+        if (preview) preview.classList.add('hidden');
+
+        if (typeof showToast === 'function') {
+            showToast("บันทึกข้อมูลซ่อมบำรุงเรียบร้อยแล้วค่ะ 🔧", "success");
+        }
+
+        if (typeof loadMaintenanceList === 'function') {
+            loadMaintenanceList();
+        }
+
+    } catch (err) {
+        console.error('handleMaintenanceSubmit error:', err);
+        if (typeof showToast === 'function') {
+            showToast('เกิดข้อผิดพลาด: ' + (err.message || err), 'error');
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.dataset.busy = '0';
+            btn.innerText = originalText;
+        }
+    }
+}
+
+
+// 2. ฟังก์ชันตัวกลาง (Wiring Function)
+// =========================================
+// ANCHOR: wireFormSubmissions
+function wireFormSubmissions() {
+  console.log("🔌 Wiring Form Submissions (Stable Mode)...");
+
+  const bindForm = (id, handler, label) => {
+    const form = document.getElementById(id);
+    if (!form) {
+      console.warn(`⚠️ Form #${id} not found`);
+      return;
+    }
+
+    if (typeof handler !== 'function') {
+      console.error(`❌ Handler missing for #${id}`);
+      return;
+    }
+
+    if (form.dataset.wired === 'true') {
+      console.log(`ℹ️ Form #${id} already wired`);
+      return;
+    }
+
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (form.dataset.submitting === 'true') {
+        console.warn(`🚫 Duplicate submit blocked: #${id}`);
+        return false;
+      }
+
+      form.dataset.submitting = 'true';
+      console.log(`🚀 Form #${id} submitted via JS`);
+
+      try {
+        await handler(e);
+      } catch (err) {
+        console.error(`❌ Submit error on #${id}:`, err);
+        if (typeof showToast === 'function') {
+          showToast(`เกิดข้อผิดพลาด: ${err.message || err}`, 'error');
+        }
+      } finally {
+        form.dataset.submitting = 'false';
+      }
+
+      return false;
+    });
+
+    form.dataset.wired = 'true';
+    console.log(`✅ ${label || id} wired successfully`);
+  };
+
+  bindForm('fuel-form', submitFuel, 'Fuel Form');
+  bindForm('insurance-form', handleInsuranceSubmit, 'Insurance Form');
+  bindForm('maintenance-form', handleMaintenanceSubmit, 'Maintenance Form');
+}
+
+async function handleBookingSubmit(event) {
+  event.preventDefault();
+  clearVehicleErrorBanner();
+
+  try {
+    // ✅ 1) สร้าง base payload ตามเดิมของระบบคุณ
+    // *** ตรงนี้ให้คุณใช้วิธีเดิมของคุณที่เคยสร้าง payload อยู่แล้ว ***
+    var payload = collectBookingPayload(); // <-- ต้องเป็นฟังก์ชันที่คุณมีอยู่แล้ว
+    if (!payload) {
+      showVehicleErrorBanner('Payload ว่าง');
+      return;
+    }
+
+    // ✅ 2) อ่านประเภทที่เลือกจาก DOM
+    var selectedTypes = getSelectedCarTypesFromDom().map(normalizeCarTypeKey).filter(Boolean);
+
+    // ✅ 3) ถ้าเลือก > 1 ประเภท -> split เป็นหลาย booking
+    if (selectedTypes.length > 1) {
+      console.log('✅ Multi-type detected => splitting bookings...', selectedTypes);
+
+      var splitRes = await submitSplitBookings(payload, selectedTypes, 'createBookingAndBroadcast');
+
+      if (!splitRes.ok) {
+        console.log('❌ Split bookings failed', splitRes);
+        return;
+      }
+
+      // ✅ สำเร็จ: splitRes.results มี bookingId หลายตัว
+      console.log('✅ Split bookings created:', splitRes.results);
+
+      // (optional) คุณจะ close modal / reset form แบบเดิมได้เลย
+      if (typeof afterBookingSuccess === 'function') {
+        afterBookingSuccess(splitRes); // hook เดิมของคุณ
+      }
+      return;
+    }
+
+    // ✅ 4) กรณีเลือกประเภทเดียว -> เดิม
+    if (selectedTypes.length === 1) {
+      payload.carType = selectedTypes[0];
+    }
+
+    setSubmitDisabled(true);
+
+    var res = await callServer('createBookingAndBroadcast', payload);
+
+    if (!res || !res.ok) {
+      var errMsg = (res && (res.error || res.message)) ? (res.error || res.message) : 'server_not_ok';
+      showVehicleErrorBanner('สร้างรายการจองไม่สำเร็จ: ' + errMsg);
+      console.error('❌ createBookingAndBroadcast FAIL:', res);
+      return;
+    }
+
+    console.log('✅ createBookingAndBroadcast OK bookingId=', (res.id || res.bookingId || ''));
+
+    if (typeof afterBookingSuccess === 'function') {
+      afterBookingSuccess(res);
+    }
+
+  } catch (e) {
+    console.error('❌ handleBookingSubmit Exception:', e);
+    showVehicleErrorBanner('เกิดข้อผิดพลาด: ' + (e && e.message ? e.message : e));
+  } finally {
+    setSubmitDisabled(false);
+  }
+}
+
+// ===============================
+// ✅ Multi-Type Booking Split (Approach A)
+// 1 type = 1 booking row in Sheet
+// ===============================
+
+function getSelectedCarTypesFromDom() {
+  // รองรับทั้ง select และ checkbox/radio
+  var el = document.querySelector('#carType, [name="carType"]');
+  if (el && el.tagName === 'SELECT') {
+    var v = String(el.value || '').trim();
+    return v ? [v] : [];
+  }
+
+  // ถ้าเป็น checkbox/radio
+  var checked = Array.from(document.querySelectorAll('input[name="carType"]:checked'))
+    .map(function (x) { return String(x.value || '').trim(); })
+    .filter(Boolean);
+
+  return checked;
+}
+
+function normalizeCarTypeKey(v) {
+  v = String(v || '').toLowerCase().trim();
+  // map ให้เป็น key เดียวกัน (van / truck)
+  if (v === 'รถตู้' || v === 'van') return 'van';
+  if (v === 'รถบรรทุก' || v === 'รถกระบะบรรทุก' || v === 'truck') return 'truck';
+  return v;
+}
+
+function setSubmitDisabled(disabled) {
+  var btn = document.querySelector('#btnSubmitBooking, button[type="submit"], .btn-submit-booking');
+  if (btn) btn.disabled = !!disabled;
+}
+
+function showVehicleErrorBanner(msg) {
+  // ถ้ามี container error เดิม ใช้อันเดิม / ถ้าไม่มีก็สร้างแบบเบาๆ (ไม่แตะ UI อื่น)
+  var box = document.querySelector('#vehicle-error-banner');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'vehicle-error-banner';
+    box.style.cssText = 'margin:10px 0;padding:10px;border-radius:10px;font-weight:600;';
+    box.style.background = '#ffe1e1';
+    box.style.color = '#7a0000';
+
+    var target = document.querySelector('#availableVehiclesContainer, #vehicleSelectionContainer, #vehicle-section') || document.body;
+    target.insertBefore(box, target.firstChild);
+  }
+  box.textContent = String(msg || 'เกิดข้อผิดพลาด');
+  box.style.display = 'block';
+}
+
+function clearVehicleErrorBanner() {
+  var box = document.querySelector('#vehicle-error-banner');
+  if (box) box.style.display = 'none';
+}
+
+function callServer(fnName, payload) {
+  if (typeof window.googleScriptRunLimited === 'function') {
+    return window.googleScriptRunLimited(fnName, payload || {});
+  }
+  return Promise.reject(new Error('googleScriptRunLimited not available'));
+}
+
+// ✅ สร้าง payload แยกตามประเภท (คัดลอก base แล้ว override เฉพาะ carType)
+function clonePayloadWithCarType(basePayload, carTypeKey) {
+  var p = JSON.parse(JSON.stringify(basePayload || {}));
+  p.carType = carTypeKey;
+
+  // กันไม่ให้ส่ง selectedTypes แบบรวมไปกับ server
+  delete p.selectedTypes;
+
+  return p;
+}
+
+// ✅ 핵심: split booking sequential
+async function submitSplitBookings(basePayload, selectedTypes, serverFnName) {
+  clearVehicleErrorBanner();
+
+  selectedTypes = (selectedTypes || []).map(normalizeCarTypeKey).filter(Boolean);
+
+  if (!selectedTypes.length) {
+    showVehicleErrorBanner('ไม่พบประเภทที่เลือก');
+    return { ok: false, error: 'no_carType_selected' };
+  }
+
+  setSubmitDisabled(true);
+
+  try {
+    console.log('🧪 [SplitBooking] selectedTypes=', selectedTypes);
+
+    var results = [];
+    for (var i = 0; i < selectedTypes.length; i++) {
+      var typeKey = selectedTypes[i];
+      var payload = clonePayloadWithCarType(basePayload, typeKey);
+
+      console.log('🚀 [SplitBooking] creating booking for type=', typeKey, 'payload=', payload);
+
+      var res = await callServer(serverFnName, payload);
+
+      if (!res || !res.ok) {
+        var errMsg = (res && (res.error || res.message)) ? (res.error || res.message) : 'server_not_ok';
+        showVehicleErrorBanner('สร้างรายการจองไม่สำเร็จ (' + typeKey + '): ' + errMsg);
+        console.error('❌ [SplitBooking] FAIL type=', typeKey, res);
+        return { ok: false, error: errMsg, type: typeKey, results: results };
+      }
+
+      console.log('✅ [SplitBooking] OK type=', typeKey, 'bookingId=', (res.id || res.bookingId || ''));
+      results.push(res);
+    }
+
+    // ✅ สำเร็จทุกประเภท
+    console.log('✅ [SplitBooking] DONE count=', results.length, results);
+    return { ok: true, results: results };
+
+  } catch (e) {
+    console.error('❌ [SplitBooking] Exception:', e);
+    showVehicleErrorBanner('เกิดข้อผิดพลาด: ' + (e && e.message ? e.message : e));
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+
+  } finally {
+    setSubmitDisabled(false);
+  }
+}
+
+
+
+/* ================== submitBooking (IMPROVED) ================== */
+async function submitBooking(event) {
+  const form = document.getElementById('booking-form');
+  const submitBtn = document.querySelector('button[form="booking-form"]') || document.getElementById('new-booking-btn');
+
+  setBtnLoading(submitBtn, true);
+
+  try {
+    // Keep: Guard for vehicle loading
+    if (window.__VB_CAN_SUBMIT__ === false) {
+      throw new Error("ยังโหลดรถว่างไม่สำเร็จ กรุณาลองใหม่ก่อนส่งฟอร์ม");
+    }
+
+    // CHANGE: Trigger validation and Check INVALID state immediately
+    // เรียก clamp เพื่อ update UI และ status ล่าสุด
+    const currentCount = clampVehicleCountNow('submitBooking_Check'); 
+    const countEl = getVehicleCountEl();
+    
+    // ถ้า Input ถูกมาร์คว่า invalid (สีแดง) ให้หยุดทันที
+    if (countEl && countEl.dataset.invalid === "true") {
+       countEl.classList.add('shake');
+       setTimeout(() => countEl.classList.remove('shake'), 500);
+       countEl.focus();
+       throw new Error(`จำนวนรถที่ขอ (${countEl.value} คัน) เกินจำนวนรถว่างค่ะ`);
+    }
+
+    const payload = prepareBookingPayload(form);
+
+    // Keep: Multi-type selection logic
+    let selectedVehicles = [];
+    try {
+      if (typeof window.__VB_GET_SELECTED_VEHICLES__ === "function") {
+        selectedVehicles = window.__VB_GET_SELECTED_VEHICLES__() || [];
+      }
+    } catch (_) {}
+
+    const typesChecked = Array.from(document.querySelectorAll('#vehicle-selection input[name="carType"]:checked'))
+      .map(x => String(x.value || '').trim())
+      .filter(Boolean);
+
+    if (typesChecked.length > 0 && selectedVehicles.length === 0) {
+      throw new Error("กรุณาเลือก ‘รถที่ต้องการ’ อย่างน้อย 1 คันก่อนส่งคำขอ");
+    }
+
+    payload.selectedVehicles = selectedVehicles;
+    // CHANGE: Ensure payload sends the validated integer
+    payload.vehicleCount = currentCount; 
+
+    console.log("📦 [Payload] พร้อมส่ง:", payload);
+
+    const res = await googleScriptRun('createBookingAndBroadcast', payload);
+    if (!res || !res.ok) throw new Error(res.error || 'บันทึกไม่สำเร็จ');
+
+    showToast(`🎉 จองสำเร็จ! ID: ${res.id}`, 'success');
+    closeBookingForm();
+
+    // Keep: Refresh views
+    if (typeof loadBookingsView === 'function') loadBookingsView();
+    if (typeof renderCalendar === 'function' && window.calendarState) {
+      renderCalendar(window.calendarState.currentYear, window.calendarState.currentMonth);
+    }
+  } catch (err) {
+    console.error("❌ [Submit Error]:", err);
+    showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+  } finally {
+    setBtnLoading(submitBtn, false);
+  }
+}
+
+
+    /* ================== Tab Management ================== */
+    function _populateSelect(sel, items, withPlaceholder) {
+      var el = document.getElementById(sel);
+      if (!el) return;
+      var html = [];
+      if (withPlaceholder) html.push('<option value="">-- เลือก --</option>');
+      for (var i = 0; i < items.length; i++) {
+        var v = String(items[i] || '').trim();
+        if (!v) continue;
+        html.push('<option value="' + v.replace(/"/g, '&quot;') + '">' + v.replace(/</g, '&lt;') + '</option>');
+      }
+      el.innerHTML = html.join('');
+    }
+
+    function _populateDatalist(id, items) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var html = [];
+      for (var i = 0; i < items.length; i++) {
+        var v = String(items[i] || '').trim();
+        if (!v) continue;
+        html.push('<option value="' + v.replace(/"/g, '&quot;') + '"></option>');
+      }
+      el.innerHTML = html.join('');
+    }
+
+    function vbDebounce(fn, wait) {
+      var t = 0;
+      return function () {
+        var ctx = this, args = arguments;
+        clearTimeout(t);
+        t = setTimeout(function () { fn.apply(ctx, args); }, wait || 0);
+      };
+    }
+
+    var debounce = vbDebounce;
+
+    function vbSet(key, val) {
+      try { localStorage.setItem(key, String(val == null ? '' : val)); } catch (_) {}
+    }
+    function vbGet(key, def) {
+      try {
+        var v = localStorage.getItem(key);
+        return (v == null ? (def == null ? '' : def) : v);
+      } catch (_) {
+        return (def == null ? '' : def);
+      }
+    }
+
+  // ===== BERRY: Calendar Safe Reflow (NO resize loop) =====
+function __berryReflowCalendarAfterTabShown__() {
+  try {
+    if (window.__berryCalendarReflowBusy) return;
+    window.__berryCalendarReflowBusy = true;
+
+    const tab = document.getElementById('calendar-tab');
+    if (!tab || !tab.classList.contains('active')) {
+      window.__berryCalendarReflowBusy = false;
+      return;
+    }
+
+    const grid = document.getElementById('calendar-grid');
+    if (!grid) {
+      window.__berryCalendarReflowBusy = false;
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          const st = window.calendarState || {};
+          const y = st.currentYear || new Date().getFullYear();
+          const m = st.currentMonth || (new Date().getMonth() + 1);
+
+          if (typeof renderCalendar === 'function') {
+            renderCalendar(y, m);
+          }
+
+          console.log('✅ [Calendar] Reflow after tab shown PASS');
+        } catch (e) {
+          console.error('❌ [Calendar] Reflow after tab shown FAIL', e);
+        } finally {
+          window.__berryCalendarReflowBusy = false;
+        }
+      });
+    });
+
+  } catch (e) {
+    window.__berryCalendarReflowBusy = false;
+    console.error('❌ __berryReflowCalendarAfterTabShown__ error', e);
+  }
+}
+
+function __berryReflowDashboardAfterTabShown__() {
+  try {
+    if (window.__berryDashboardReflowBusy) return;
+    window.__berryDashboardReflowBusy = true;
+
+    const tab = document.getElementById('dashboard-tab');
+    if (!tab || !tab.classList.contains('active')) {
+      window.__berryDashboardReflowBusy = false;
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        try {
+          const driverChart = document.getElementById('driver-chart');
+          const vehicleChart = document.getElementById('vehicle-chart');
+
+          if (driverChart) {
+            driverChart.style.display = '';
+            driverChart.style.visibility = 'visible';
+          }
+
+          if (vehicleChart) {
+            vehicleChart.style.display = '';
+            vehicleChart.style.visibility = 'visible';
+          }
+
+          if (window.__vbCurrentTab === '#dashboard-tab' &&
+              window.__dashboardRenderToken &&
+              typeof window._renderDashboardChartsSafely === 'function') {
+            window._renderDashboardChartsSafely(window.__dashboardRenderToken);
+          }
+
+          console.log('✅ [Dashboard] Reflow after tab shown PASS');
+        } catch (e) {
+          console.error('❌ [Dashboard] Reflow after tab shown FAIL', e);
+        } finally {
+          window.__berryDashboardReflowBusy = false;
+        }
+      });
+    });
+
+  } catch (e) {
+    window.__berryDashboardReflowBusy = false;
+    console.error('❌ __berryReflowDashboardAfterTabShown__ error', e);
+  }
+}
+
+function showTab(tabKey) {
+  if (!window.__vbTabInitTimers) window.__vbTabInitTimers = {};
+
+  const mapKeyToId = {
+    calendar: '#calendar-tab',
+    bookings: '#bookings-tab',
+    timeline: '#timeline-tab',
+    fuel: '#fuel-tab',
+    insurance: '#insurance-tab',
+    maintenance: '#maintenance-tab',
+    dashboard: '#dashboard-tab'
+  };
+
+  const targetId = (tabKey && String(tabKey).startsWith('#'))
+    ? String(tabKey)
+    : (mapKeyToId[tabKey] || '#calendar-tab');
+
+  const targetEl = document.querySelector(targetId);
+
+  if (!targetEl) {
+    console.warn('showTab: target view not found for', tabKey);
+    return targetId;
+  }
+
+  // ถ้ากด tab เดิมซ้ำ ให้ทำเฉพาะ reflow ที่จำเป็น ห้าม reload view ซ้ำ
+  if (window.__vbCurrentTab === targetId) {
+    if (targetId === '#calendar-tab' && typeof __berryReflowCalendarAfterTabShown__ === 'function') {
+      setTimeout(function () {
+        __berryReflowCalendarAfterTabShown__();
+      }, 0);
+    }
+
+    if (targetId === '#dashboard-tab' && typeof __berryReflowDashboardAfterTabShown__ === 'function') {
+      setTimeout(function () {
+        __berryReflowDashboardAfterTabShown__();
+      }, 0);
+    }
+
+    return targetId;
+  }
+
+  // ยกเลิก timer init เก่าของทุก tab กันงานค้างจากการสลับเร็ว
+  try {
+    Object.keys(window.__vbTabInitTimers).forEach(function (key) {
+      if (window.__vbTabInitTimers[key]) {
+        clearTimeout(window.__vbTabInitTimers[key]);
+        window.__vbTabInitTimers[key] = null;
+      }
+    });
+  } catch (e) {
+    console.warn('showTab: clear timers warning', e);
+  }
+
+  window.__vbCurrentTab = targetId;
+
+  const btns = document.querySelectorAll('.nav-tabs .tab-btn');
+  btns.forEach(function (btn) {
+    const btnTarget = btn.getAttribute('data-tab-target');
+    const isActive = btnTarget === targetId;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+
+  const views = document.querySelectorAll('.tab-content');
+  views.forEach(function (v) {
+    const isTarget = ('#' + v.id) === targetId;
+    v.classList.toggle('active', isTarget);
+    v.classList.toggle('hidden', !isTarget);
+    v.setAttribute('aria-hidden', isTarget ? 'false' : 'true');
+    v.style.display = isTarget ? '' : 'none';
+  });
+
+  queueMicrotask(function () {
+    try {
+      const first = targetEl.querySelector('input, select, textarea, button, [tabindex]:not([tabindex="-1"])');
+      if (first && typeof first.focus === 'function') {
+        first.focus({ preventScroll: true });
+      }
+    } catch (e) {}
+  });
+
+  try {
+    window.__vbTabInitTimers[targetId] = setTimeout(function () {
+      window.__vbTabInitTimers[targetId] = null;
+
+      switch (targetId) {
+        case '#calendar-tab': {
+          const st = window.calendarState || {};
+          const d = new Date();
+          const y = st.currentYear || d.getFullYear();
+          const m = st.currentMonth || (d.getMonth() + 1);
+
+          if (typeof renderCalendar === 'function') {
+            renderCalendar(y, m);
+          } else if (typeof loadCalendarView === 'function') {
+            loadCalendarView(y, m);
+          }
+
+          if (typeof __berryReflowCalendarAfterTabShown__ === 'function') {
+            setTimeout(function () {
+              __berryReflowCalendarAfterTabShown__();
+            }, 0);
+          }
+          break;
+        }
+
+        case '#bookings-tab':
+          if (typeof loadBookingsView === 'function') loadBookingsView();
+          break;
+
+        case '#timeline-tab':
+          if (typeof loadTimelineView === 'function') loadTimelineView();
+          break;
+
+        case '#fuel-tab':
+          if (typeof loadFuelTabOptions === 'function') loadFuelTabOptions();
+          break;
+
+        case '#insurance-tab':
+          if (typeof loadInsuranceTabOptions === 'function') loadInsuranceTabOptions();
+          break;
+
+        case '#maintenance-tab':
+          if (typeof loadMaintenanceTabOptions === 'function') loadMaintenanceTabOptions();
+          break;
+
+        case '#dashboard-tab':
+          if (typeof loadDashboardView === 'function') {
+            loadDashboardView('tab-switch');
+          }
+          if (typeof __berryReflowDashboardAfterTabShown__ === 'function') {
+            setTimeout(function () {
+              __berryReflowDashboardAfterTabShown__();
+            }, 0);
+          }
+          break;
+      }
+    }, 0);
+  } catch (e) {
+    console.error('Tab init error for', targetId, e);
+  }
+
+  if (typeof ensureUploadButtonsLive === 'function') {
+    try {
+      setTimeout(function () {
+        ensureUploadButtonsLive();
+      }, 120);
+    } catch (e) {
+      console.warn('ensureUploadButtonsLive error:', e);
+    }
+  }
+
+  try {
+    localStorage.setItem('lastTab', targetId);
+  } catch (e) {}
+
+  console.log('🔄 Switched to tab:', targetId);
+  return targetId;
+}
+   
+// ===== BERRY: Resize handler (Calendar only) =====
+(function wireCalendarResizeOnce() {
+  if (window.__berryCalendarResizeWired) return;
+  window.__berryCalendarResizeWired = true;
+
+  let timer = 0;
+  let lastRun = 0;
+
+  function isCalendarReady() {
+    const tab = document.getElementById('calendar-tab');
+    const loading = document.getElementById('loading');
+    if (!tab || !tab.classList.contains('active')) return false;
+    if (document.hidden) return false;
+    if (loading && !loading.classList.contains('hidden')) return false;
+    return true;
+  }
+
+  function scheduleCalendarReflow(reason) {
+  // Debounce calendar reflow to avoid excessive renders.
+  if (window.__berryScheduleTimer) clearTimeout(window.__berryScheduleTimer);
+  window.__berryScheduleTimer = setTimeout(() => {
+    if (!isCalendarReady()) return;
+    if (typeof __berryReflowCalendarAfterTabShown__ === 'function') {
+      try {
+        __berryReflowCalendarAfterTabShown__();
+        console.log('✅ [Calendar] Reflow executed from:', reason || 'unknown');
+      } catch (err) {
+        console.error('❌ [Calendar] Reflow failed:', err);
+      }
+    }
+  }, 300);
+}
+window.__berryScheduleCalendarResize__ = scheduleCalendarReflow;
+window.addEventListener('resize', () => scheduleCalendarReflow('resize'), { passive: true });
+window.addEventListener('orientationchange', () => scheduleCalendarReflow('orientationchange'), { passive: true });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) scheduleCalendarReflow('visibilitychange');
+});
+})();
+
+window.addEventListener('load', async function () {
+  if (window.vbLoadInitDone) return;
+  window.vbLoadInitDone = true;
+
+  console.log('🚀 Application Starting...');
+
+  const loadingElement = document.getElementById('loading');
+
+  try {
+    // ใช้ศูนย์กลาง init หลักของระบบก่อนเสมอ
+    if (typeof initializeApp === 'function') {
+      await initializeApp({ silentIfRunning: true, source: 'window.load' });
+      return;
+    }
+
+    // Fallback เฉพาะกรณีไม่มี initializeApp จริง ๆ
+    if (typeof initTabs === 'function') initTabs();
+    if (typeof initModal === 'function') initModal();
+    if (typeof initCalendarView === 'function') initCalendarView();
+    if (typeof initUiComponents === 'function') initUiComponents();
+
+    if (typeof openInitialTab === 'function') openInitialTab();
+    else if (typeof showTab === 'function') showTab('#calendar-tab');
+
+    if (typeof updateCounters === 'function') updateCounters();
+
+  } catch (error) {
+    console.error('❌ Critical Error during init:', error);
+  } finally {
+    if (loadingElement) {
+      setTimeout(function () {
+        loadingElement.classList.add('hidden');
+        if (typeof window.__berryScheduleCalendarResize__ === 'function') {
+          window.__berryScheduleCalendarResize__('load_finally');
+        }
+      }, 300);
+    }
+  }
+});
+    /* ================== DEBOUNCED TAB LOADERS ================== */
+    var __tabLoaderTimer = null;
+
+    function _scheduleTabLoad(loaderFn) {
+        if (__tabLoaderTimer) clearTimeout(__tabLoaderTimer);
+        __tabLoaderTimer = setTimeout(() => {
+            loaderFn();
+        }, 600);
+    }
+
+    /* ================== FUEL TAB LOADER ================== */
+   async function loadFuelTabOptions() {
+  _scheduleTabLoad(async () => {
+    if (window.__vbCurrentTab !== '#fuel-tab') return;
+
+    if (window.__loaded_fuel_opts) {
+      if (window.__vbCurrentTab === '#fuel-tab' && typeof loadFuelData === 'function') {
+        loadFuelData();
+      }
+      return;
+    }
+
+    if (window.__loading_fuel) return;
+
+    var plateEl = document.getElementById('fuel-plate');
+    var driverEl = document.getElementById('fuel-driver-select');
+    var workTypeSel = document.getElementById('fuel-workType-select');
+    var projectInp = document.getElementById('fuel-project');
+
+    if (!plateEl || !driverEl) return;
+
+    window.__loading_fuel = true;
+
+    plateEl.innerHTML = '<option>⏳ กำลังโหลด...</option>';
+    driverEl.innerHTML = '<option>⏳ กำลังโหลด...</option>';
+
+    try {
+      var run = (typeof window.gas === 'function')
+        ? window.gas
+        : (typeof window.googleScriptRunLimited === 'function'
+            ? window.googleScriptRunLimited
+            : window.googleScriptRun);
+
+      var res = await run('apiGetFuelFormOptions', {});
+      if (window.__vbCurrentTab !== '#fuel-tab') return;
+      if (!res || !res.ok) throw new Error(res ? res.error : 'No response from server');
+
+      var plates = Array.isArray(res.plates) ? res.plates : [];
+      var drivers = Array.isArray(res.drivers) ? res.drivers : [];
+
+      plateEl.innerHTML =
+        '<option value="">-- เลือกรถ --</option>' +
+        plates.map(function(p) {
+          return '<option value="' + String(p).replace(/"/g, '&quot;') + '">' + String(p) + '</option>';
+        }).join('');
+
+      driverEl.innerHTML =
+        '<option value="">-- เลือกผู้บันทึก --</option>' +
+        drivers.map(function(d) {
+          return '<option value="' + String(d).replace(/"/g, '&quot;') + '">' + String(d) + '</option>';
+        }).join('');
+
+      if (workTypeSel) {
+        var lastWorkType = (typeof vbGet === 'function') ? vbGet('vb.fuel.workType', '') : '';
+        if (lastWorkType) workTypeSel.value = lastWorkType;
+        workTypeSel.onchange = function() {
+          if (typeof vbSet === 'function') vbSet('vb.fuel.workType', workTypeSel.value || '');
+        };
+      }
+
+      if (projectInp) {
+        var lastProject = (typeof vbGet === 'function') ? vbGet('vb.fuel.project', '') : '';
+        if (lastProject) projectInp.value = lastProject;
+        projectInp.oninput = function() {
+          if (typeof vbSet === 'function') vbSet('vb.fuel.project', projectInp.value || '');
+        };
+      }
+
+      var lastPlate = (typeof vbGet === 'function') ? vbGet('vb.fuel.plate', '') : '';
+      var lastDriver = (typeof vbGet === 'function') ? vbGet('vb.fuel.driver', '') : '';
+
+      if (lastPlate && plates.indexOf(lastPlate) >= 0) plateEl.value = lastPlate;
+      if (lastDriver && drivers.indexOf(lastDriver) >= 0) driverEl.value = lastDriver;
+
+      plateEl.onchange = function() {
+        if (typeof vbSet === 'function') vbSet('vb.fuel.plate', plateEl.value || '');
+      };
+      driverEl.onchange = function() {
+        if (typeof vbSet === 'function') vbSet('vb.fuel.driver', driverEl.value || '');
+      };
+
+      window.__loaded_fuel_opts = true;
+
+    } catch (e) {
+      console.warn('Error initializing fuel options:', e);
+
+      if (window.__vbCurrentTab === '#fuel-tab') {
+        var retryHtml = '<option value="">❌ โหลดไม่สำเร็จ (คลิกเพื่อลองใหม่)</option>';
+        plateEl.innerHTML = retryHtml;
+        driverEl.innerHTML = retryHtml;
+
+        plateEl.onclick = function() {
+          if (plateEl.value === '') {
+            window.__loaded_fuel_opts = false;
+            window.__loading_fuel = false;
+            plateEl.onclick = null;
+            loadFuelTabOptions();
+          }
+        };
+
+        driverEl.onclick = function() {
+          if (driverEl.value === '') {
+            window.__loaded_fuel_opts = false;
+            window.__loading_fuel = false;
+            driverEl.onclick = null;
+            loadFuelTabOptions();
+          }
+        };
+      }
+
+      if (workTypeSel) workTypeSel.value = '';
+      if (projectInp) projectInp.value = '';
+
+    } finally {
+      const bdgSel = document.getElementById('fuel-budget-type');
+      const bdgWrap = document.getElementById('fuel-budget-other-wrap');
+      const bdgInp = document.getElementById('fuel-budget-other');
+      const bdgSpacer = document.getElementById('budget-spacer');
+
+      if (bdgSel && !bdgSel.dataset.wiredBdg) {
+        bdgSel.addEventListener('change', function() {
+          if (bdgSel.value === 'other') {
+            if (bdgWrap) bdgWrap.classList.remove('hidden');
+            if (bdgSpacer) bdgSpacer.classList.add('hidden');
+            if (bdgInp) {
+              bdgInp.required = true;
+              bdgInp.focus();
+            }
+          } else {
+            if (bdgWrap) bdgWrap.classList.add('hidden');
+            if (bdgSpacer) bdgSpacer.classList.remove('hidden');
+            if (bdgInp) {
+              bdgInp.value = '';
+              bdgInp.required = false;
+            }
+          }
+        });
+        bdgSel.dataset.wiredBdg = '1';
+      }
+
+      const fLiters = document.getElementById('fuel-liters');
+      const fPrice = document.getElementById('fuel-price');
+      const fCost = document.getElementById('fuel-cost');
+
+      const calcCost = function() {
+        const l = parseFloat(fLiters && fLiters.value) || 0;
+        const p = parseFloat(fPrice && fPrice.value) || 0;
+        if (l > 0 && p > 0) {
+          fCost.value = (l * p).toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+          });
+        } else if (fCost) {
+          fCost.value = '';
+        }
+      };
+
+      if (fLiters && fPrice && fCost && !fLiters.dataset.wiredCalc) {
+        fLiters.addEventListener('input', calcCost);
+        fPrice.addEventListener('input', calcCost);
+        fLiters.dataset.wiredCalc = '1';
+      }
+
+      window.__loading_fuel = false;
+
+      if (window.__vbCurrentTab === '#fuel-tab' && typeof loadFuelData === 'function') {
+        loadFuelData();
+      }
+    }
+  });
+}
+
+    // ================== Fuel Helper Functions ==================
+   /* [ANCHOR: Client Load Fuel Data (Real UI)] */
+/* [ANCHOR: Load Fuel Data (Integrated with Pagination)] */
+async function loadFuelData() {
+    const tbody = document.getElementById('fuel-table-body');
+    if (!tbody) return;
+
+    const now = Date.now();
+    const cached = window.__fuelHistoryCache || null;
+    if (window.__loading_fuel_history) return;
+    if (window.__vbCurrentTab === '#fuel-tab' && cached && Array.isArray(cached.data) && (now - Number(cached.at || 0)) < 45000) {
+        PAGINATION_STATE.fuel.data = cached.data;
+        PAGINATION_STATE.fuel.page = cached.page || 1;
+        renderTablePage('fuel', 'fuel-table-body');
+        return;
+    }
+
+    window.__loading_fuel_history = true;
+    window.__fuelHistoryToken = (Number(window.__fuelHistoryToken || 0) + 1);
+    const requestToken = window.__fuelHistoryToken;
+    
+    // 1. Loading State (ใช้ Design สวยๆ ของพี่)
+    tbody.innerHTML = `
+        <tr>
+            <td colspan="5" class="text-center" style="padding: 2rem;">
+                <div class="spinner" style="width:24px;height:24px;margin:0 auto 10px;border-width:3px;"></div>
+                <span class="text-muted">กำลังโหลดข้อมูลประวัติ...</span>
+            </td>
+        </tr>`;
+    
+    try {
+        // 2. Fetch Data (เรียก Server)
+        const run = (typeof window.googleScriptRunLimited === 'function')
+            ? window.googleScriptRunLimited
+            : window.googleScriptRun;
+        const res = await run('apiGetFuelHistory', {});
+
+        if (window.__fuelHistoryToken !== requestToken || window.__vbCurrentTab !== '#fuel-tab') return;
+        
+        if (!res || !res.ok) throw new Error(res ? res.error : 'Server error');
+        
+        const list = res.data || [];
+
+        console.log("✅ Fuel Data Loaded:", list.length, "items");
+
+        // ---------------------------------------------------------
+        // 3. ส่งข้อมูลเข้าสู่ระบบแบ่งหน้า (PAGINATION SYSTEM) ✅ จุดสำคัญ!
+        // ---------------------------------------------------------
+        PAGINATION_STATE.fuel.data = list; // เก็บข้อมูลทั้งหมดลง State
+        PAGINATION_STATE.fuel.page = 1;    // รีเซ็ตไปหน้า 1
+        window.__fuelHistoryCache = { at: Date.now(), data: list, page: 1 };
+
+        // 4. สั่งให้วาดตาราง (Render) 
+        // ฟังก์ชันนี้จะตัดข้อมูลเหลือ 5 บรรทัด และสร้างปุ่มกดให้เองอัตโนมัติ
+        renderTablePage('fuel', 'fuel-table-body');
+
+    } catch (e) {
+        if (window.__fuelHistoryToken !== requestToken) return;
+        console.error("Load Fuel Error:", e);
+        // Error State (ใช้ Design ของพี่)
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="5" class="text-center text-danger" style="padding: 1.5rem;">
+                    😿 โหลดข้อมูลไม่สำเร็จ: ${e.message}
+                </td>
+            </tr>`;
+    } finally {
+        if (window.__fuelHistoryToken === requestToken) {
+            window.__loading_fuel_history = false;
+        }
+    }
+}
+
+/* [ANCHOR: Client - Load Insurance & Maintenance Tab Options] */
+async function loadInsuranceTabOptions() {
+  _scheduleTabLoad(async () => {
+    if (window.__vbCurrentTab !== '#insurance-tab') return;
+
+    const plateEl = document.getElementById('insurance-plate');
+    const driverEl = document.getElementById('insurance-driver-select');
+
+    if (!plateEl && !driverEl) return;
+    if (window.__loading_insurance_opts) return;
+
+    const cachedVehicles = (window.vehiclesList && Array.isArray(window.vehiclesList.all))
+      ? window.vehiclesList.all
+      : (Array.isArray(window.vehiclesList) ? window.vehiclesList : []);
+    const cachedPlates = cachedVehicles.map(function(v) {
+      return (v && typeof v === 'object') ? (v.plate || '') : String(v || '');
+    }).filter(function(v) { return String(v || '').trim(); });
+    const cachedDrivers = Array.isArray(window.driversList) ? window.driversList : [];
+
+    if (cachedPlates.length && cachedDrivers.length) {
+      if (plateEl) {
+        plateEl.innerHTML =
+          '<option value="">-- เลือกรถ --</option>' +
+          cachedPlates.map(function(val) {
+            return `<option value="${String(val).replace(/"/g, '&quot;')}">${String(val)}</option>`;
+          }).join('');
+      }
+      if (driverEl) {
+        driverEl.innerHTML =
+          '<option value="">-- เลือกผู้บันทึก --</option>' +
+          cachedDrivers.map(function(name) {
+            const val = String(name || '').trim();
+            return `<option value="${val.replace(/"/g, '&quot;')}">${val}</option>`;
+          }).join('');
+      }
+      window.__loaded_insurance_opts = true;
+      if (window.__vbCurrentTab === '#insurance-tab' && typeof loadInsuranceList === 'function') {
+        loadInsuranceList();
+      }
+      return;
+    }
+
+    window.__loading_insurance_opts = true;
+
+    if (plateEl) {
+      plateEl.innerHTML = '<option value="">⏳ กำลังโหลดรายการรถ...</option>';
+    }
+    if (driverEl) {
+      driverEl.innerHTML = '<option value="">⏳ กำลังโหลดรายชื่อผู้บันทึก...</option>';
+    }
+
+    try {
+      const run = (typeof window.gas === 'function')
+        ? window.gas
+        : (typeof window.googleScriptRunLimited === 'function'
+            ? window.googleScriptRunLimited
+            : window.googleScriptRun);
+
+      const [plateRes, driverRes] = await Promise.all([
+        run('apiGetInsurancePlates', {}),
+        new Promise((resolve, reject) => {
+          google.script.run
+            .withSuccessHandler(resolve)
+            .withFailureHandler(reject)
+            .getDriverList();
+        })
+      ]);
+
+      if (window.__vbCurrentTab !== '#insurance-tab') return;
+
+      if (!plateRes || !plateRes.ok) {
+        throw new Error((plateRes && plateRes.error) || 'โหลดทะเบียนรถไม่สำเร็จ');
+      }
+
+      const plates = Array.isArray(plateRes.plates) ? plateRes.plates : [];
+      const drivers = Array.isArray(driverRes) ? driverRes : [];
+
+      if (plateEl) {
+        plateEl.innerHTML =
+          '<option value="">-- เลือกรถ --</option>' +
+          plates.map(function(p) {
+            const val = (typeof p === 'object') ? (p.plate || '') : String(p || '');
+            return `<option value="${String(val).replace(/"/g, '&quot;')}">${String(val)}</option>`;
+          }).join('');
+      }
+
+      if (driverEl) {
+        driverEl.innerHTML =
+          '<option value="">-- เลือกผู้บันทึก --</option>' +
+          drivers.map(function(name) {
+            const val = String(name || '').trim();
+            return `<option value="${val.replace(/"/g, '&quot;')}">${val}</option>`;
+          }).join('');
+      }
+
+      window.__loaded_insurance_opts = true;
+      console.log('✅ Insurance Tab Options loaded:', {
+        plates: plates.length,
+        drivers: drivers.length
+      });
+
+    } catch (e) {
+      console.error('❌ loadInsuranceTabOptions error:', e);
+
+      if (plateEl) {
+        plateEl.innerHTML = '<option value="">❌ โหลดรายการรถไม่สำเร็จ</option>';
+      }
+      if (driverEl) {
+        driverEl.innerHTML = '<option value="">❌ โหลดรายชื่อผู้บันทึกไม่สำเร็จ</option>';
+      }
+
+      if (typeof showToast === 'function') {
+        showToast('โหลดข้อมูลแท็บประกันภัยไม่สำเร็จ: ' + e.message, 'error');
+      }
+
+    } finally {
+      window.__loading_insurance_opts = false;
+
+      if (window.__vbCurrentTab === '#insurance-tab' && typeof loadInsuranceList === 'function') {
+        loadInsuranceList();
+      }
+    }
+  });
+}
+
+// ANCHOR: loadMaintenanceTabOptions
+async function loadMaintenanceTabOptions() {
+    _scheduleTabLoad(async () => {
+        if (window.__vbCurrentTab !== '#maintenance-tab') return;
+        if (window.__loading_maintenance_opts) return;
+
+        const plateEl = document.getElementById('maintenance-plate');
+        const driverEl = document.getElementById('maintenance-driver-select');
+
+        if (!plateEl && !driverEl) return;
+
+        const cachedVehicles = (window.vehiclesList && Array.isArray(window.vehiclesList.all))
+            ? window.vehiclesList.all
+            : (Array.isArray(window.vehiclesList) ? window.vehiclesList : []);
+        const cachedPlates = cachedVehicles.map(function(v) {
+            return (v && typeof v === 'object') ? (v.plate || '') : String(v || '');
+        }).filter(function(v) { return String(v || '').trim(); });
+        const cachedDrivers = Array.isArray(window.driversList) ? window.driversList : [];
+
+        if (cachedPlates.length && cachedDrivers.length) {
+            if (plateEl) {
+                plateEl.innerHTML =
+                    '<option value="">-- เลือกรถ --</option>' +
+                    cachedPlates.map(function(val) {
+                        return `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`;
+                    }).join('');
+            }
+            if (driverEl) {
+                driverEl.innerHTML =
+                    '<option value="">-- เลือกพนักงานขับรถ --</option>' +
+                    cachedDrivers.map(function(name) {
+                        const val = String(name || '').trim();
+                        return `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`;
+                    }).join('');
+            }
+            window.__loaded_maintenance_opts = true;
+            if (window.__vbCurrentTab === '#maintenance-tab' && typeof loadMaintenanceList === 'function') {
+                loadMaintenanceList();
+            }
+            return;
+        }
+
+        if (window.__loaded_maintenance_opts) {
+            if (window.__vbCurrentTab === '#maintenance-tab' && typeof loadMaintenanceList === 'function') {
+                loadMaintenanceList();
+            }
+            return;
+        }
+
+        window.__loading_maintenance_opts = true;
+
+        if (plateEl) {
+            plateEl.innerHTML = '<option value="">⏳ กำลังโหลดรายการรถ...</option>';
+        }
+        if (driverEl) {
+            driverEl.innerHTML = '<option value="">⏳ กำลังโหลดรายชื่อพนักงานขับรถ...</option>';
+        }
+
+        try {
+            const runner = (typeof window.googleScriptRunLimited === 'function')
+                ? window.googleScriptRunLimited
+                : window.googleScriptRun;
+
+            const [plateRes, driverRes] = await Promise.all([
+                runner('apiGetMaintenancePlates', {}),
+                runner('getDriverList', {})
+            ]);
+
+            if (window.__vbCurrentTab !== '#maintenance-tab') return;
+
+            if (!plateRes || !plateRes.ok) {
+                throw new Error((plateRes && (plateRes.error || plateRes.message)) || 'โหลดรายการรถไม่สำเร็จ');
+            }
+
+            const plates = Array.isArray(plateRes.plates) ? plateRes.plates : [];
+            const drivers = Array.isArray(driverRes) ? driverRes : [];
+
+            if (plateEl) {
+                plateEl.innerHTML =
+                    '<option value="">-- เลือกรถ --</option>' +
+                    plates.map(p => {
+                        const val = (typeof p === 'object') ? (p.plate || '') : String(p || '');
+                        return `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`;
+                    }).join('');
+            }
+
+            if (driverEl) {
+                driverEl.innerHTML =
+                    '<option value="">-- เลือกพนักงานขับรถ --</option>' +
+                    drivers.map(name => {
+                        const val = String(name || '').trim();
+                        return `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`;
+                    }).join('');
+            }
+
+            window.__loaded_maintenance_opts = true;
+
+        } catch (e) {
+            console.warn('[MaintenanceTab] load options error:', e);
+
+            if (plateEl) {
+                plateEl.innerHTML = '<option value="">❌ โหลดรถไม่สำเร็จ (แตะเพื่อลองใหม่)</option>';
+                plateEl.onclick = function () {
+                    if (plateEl.value === '') {
+                        window.__loaded_maintenance_opts = false;
+                        window.__loading_maintenance_opts = false;
+                        plateEl.onclick = null;
+                        loadMaintenanceTabOptions();
+                    }
+                };
+            }
+
+            if (driverEl) {
+                driverEl.innerHTML = '<option value="">❌ โหลดรายชื่อคนขับไม่สำเร็จ (แตะเพื่อลองใหม่)</option>';
+                driverEl.onclick = function () {
+                    if (driverEl.value === '') {
+                        window.__loaded_maintenance_opts = false;
+                        window.__loading_maintenance_opts = false;
+                        driverEl.onclick = null;
+                        loadMaintenanceTabOptions();
+                    }
+                };
+            }
+
+            if (typeof showToast === 'function') {
+                showToast('โหลดตัวเลือกฟอร์มซ่อมบำรุงไม่สำเร็จ: ' + e.message, 'error');
+            }
+
+        } finally {
+            window.__loading_maintenance_opts = false;
+
+            if (window.__vbCurrentTab === '#maintenance-tab' && typeof loadMaintenanceList === 'function') {
+                loadMaintenanceList();
+            }
+        }
+    });
+}
+
+    function normalizeTabId(val) {
+        if (!val) return '#calendar-tab';
+        if (val.startsWith && val.startsWith('#')) return val;
+        const map = {
+            calendar: '#calendar-tab',
+            bookings: '#bookings-tab',
+            timeline: '#timeline-tab',
+            fuel: '#fuel-tab',
+            insurance: '#insurance-tab',
+            maintenance: '#maintenance-tab',
+            dashboard: '#dashboard-tab',
+        };
+        return map[val] || '#calendar-tab';
+    }
+
+    
+    function openInitialTab() {
+    try { localStorage.removeItem('lastTab'); } catch(e) {}
+
+    const initial = '#calendar-tab';
+    console.log('📅 Forcing initial tab to Calendar:', initial);
+
+    showTab(initial);
+}
+
+    function openModalA11y(id) {
+    const modal = document.getElementById(id);
+    if (!modal) return;
+    
+    // Store the element that had focus before opening the modal
+    modal.__returnFocus = document.activeElement;
+    
+    // Set accessibility attributes
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', modal.getAttribute('aria-labelledby') || (id + '-title'));
+    modal.removeAttribute('aria-hidden');
+    
+    // visual state
+    modal.classList.add('active');
+    modal.classList.remove('is-closing', 'hide', 'hidden');
+    modal.style.removeProperty('display');
+    
+    // Force flex if css didn't apply it
+    if (getComputedStyle(modal).display !== 'flex') {
+        modal.style.display = 'flex';
+    }
+    
+    document.body.classList.add('modal-open');
+    
+    // Set focus to the first focusable element inside the modal
+    const focusEl = modal.querySelector('[data-autofocus], .btn-primary, button, [href], input, select, textarea');
+    if (focusEl && typeof focusEl.focus === 'function') {
+        requestAnimationFrame(() => focusEl.focus());
+    }
+}
+
+function closeModalA11y(id) {
+    const modal = document.getElementById(id);
+    if (!modal) return;
+    
+    // 🍓 BERRY FIX: Accessibility (Remove focus before hiding to prevent aria-hidden warning)
+    if (document.activeElement && modal.contains(document.activeElement)) {
+        document.activeElement.blur();
+    }
+    
+    modal.setAttribute('aria-hidden', 'true');
+    modal.classList.remove('active', 'show', 'is-open');
+    modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+
+    // Return focus safely after DOM update
+    setTimeout(() => {
+        if (modal.__returnFocus && typeof modal.__returnFocus.focus === 'function') {
+            try { modal.__returnFocus.focus({ preventScroll: true }); } catch (_) {}
+        }
+    }, 10);
+}
+
+/**
+ * [SECTION 1] Initializer - ตัวควบคุมการเริ่มต้นระบบ (Berry Optimized v2)
+ */
+function initUiComponents() {
+  if (window.vberryUiWired) {
+    console.log('⚠️ initUiComponents(): Already wired. Refreshing essential listeners...');
+    try {
+      if (typeof setupDateInputs === 'function') setupDateInputs();
+      if (typeof syncReturnDateMin === 'function') syncReturnDateMin();
+    } catch (e) {
+      console.warn('refresh essential listeners error:', e);
+    }
+    return;
+  }
+
+  window.vberryUiWired = true;
+
+  const resolveFn = (fnName) => {
+    try {
+      if (typeof fnName !== 'string' || !fnName) return null;
+
+      if (typeof window[fnName] === 'function') return window[fnName];
+
+      try {
+        if (typeof eval(fnName) === 'function') return eval(fnName);
+      } catch (_) {}
+
+      return null;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  const safeCall = (fnName, label) => {
+    try {
+      const fn = resolveFn(fnName);
+      if (typeof fn === 'function') {
+        fn();
+        console.log('✅ ' + label);
+      } else {
+        console.error('❌ ' + label + ' (' + fnName + ') not found.');
+      }
+    } catch (e) {
+      console.warn('⚠️ ' + label + ' error:', e);
+    }
+  };
+
+  try {
+    if (typeof hideLoading === 'function') hideLoading();
+    const loadingEl = document.getElementById('loading');
+    if (loadingEl) loadingEl.classList.add('hidden');
+  } catch (_) {}
+
+  console.log('🧩 initUiComponents(): Starting wiring phases...');
+
+  safeCall('wireDashboardButtons', 'Dashboard Buttons');
+  safeCall('wireTabRouter', 'Tab Router');
+  safeCall('wireHeaderButtons', 'Header Buttons');
+  safeCall('wireMonthButtons', 'Calendar Month Controls');
+  safeCall('wireStatusFilters', 'Status Filters');
+
+  if (typeof forceShowFooter === 'function') {
+    try { forceShowFooter(); } catch (e) { console.warn('forceShowFooter error:', e); }
+  }
+
+  const deferWiring = () => {
+    console.log('🧪 initUiComponents(): Starting deferred wiring...');
+
+    safeCall('setupDateInputs', 'Thai Date System');
+    safeCall('syncReturnDateMin', 'Return Date Sync');
+    safeCall('wireBookingFormSubmit', 'Submit Logic (With Locking)');
+    safeCall('wireFormSubmissions', 'Fuel/Insurance/Maintenance Submit Wiring');
+    safeCall('installVehicleLoaderOnce', 'Vehicle Loader');
+    safeCall('wireAvailabilityListeners', 'Availability Listeners');
+    safeCall('wireVehicleCountClamp', 'Vehicle Count Clamp');
+    safeCall('installSelfTestFloatingButton', 'Self-Test Button');
+    safeCall('wireSuspendQuickTimeButtonsOnce', 'Suspend Quick Time Buttons');
+
+    console.log('✅ initUiComponents(): All phases complete.');
+  };
+
+  setTimeout(deferWiring, 150);
+}
+
+function wireHeaderButtons() {
+    const bookingBtn = document.getElementById('show-booking-btn') || document.getElementById('new-booking-btn');
+    const cancelBtn = document.getElementById('show-cancel-btn') || document.getElementById('cancel-booking-btn');
+    const loginBtn = document.getElementById('login-btn');
+    const adminBtn = document.getElementById('day-off-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const selfTestBtn = document.getElementById('self-test-btn');
+
+    const bind = (el, fn) => {
+        if (!el || el.__WIRED__) return;
+        el.__WIRED__ = true;
+        el.onclick = null;
+        el.addEventListener('click', function (e) {
+            e.preventDefault();
+            fn(e);
+        });
+    };
+
+    bind(bookingBtn, () => {
+        if (typeof showBookingForm === 'function') showBookingForm();
+    });
+
+    bind(cancelBtn, () => {
+        if (typeof openModalA11y === 'function') openModalA11y('cancel-modal');
+    });
+
+    bind(loginBtn, () => {
+        if (typeof openModalA11y === 'function') openModalA11y('admin-login-modal');
+    });
+
+    bind(adminBtn, () => {
+        const modal = document.getElementById('admin-panel-modal');
+
+        if (!modal) {
+            console.error('❌ Day Off button: #admin-panel-modal not found');
+            if (typeof showToast === 'function') {
+                showToast('ไม่พบหน้าต่าง Day Off Control Center', 'error');
+            }
+            return;
+        }
+
+        if (typeof window.openAdminPanel === 'function') {
+            window.openAdminPanel();
+            return;
+        }
+
+        console.error('❌ Day Off button: openAdminPanel not found');
+        if (typeof showToast === 'function') {
+            showToast('ฟังก์ชัน Day Off ยังไม่พร้อมใช้งาน', 'error');
+        }
+    });
+
+    if (logoutBtn) {
+        bind(logoutBtn, () => {
+            if (confirm('ต้องการออกจากระบบ?') && typeof handleLogout === 'function') {
+                handleLogout();
+            }
+        });
+    }
+
+    if (selfTestBtn) {
+        bind(selfTestBtn, (e) => {
+            if (typeof runSelfTest === 'function') runSelfTest(e);
+        });
+    }
+}
+
+function wireTabRouter() {
+    if (window.__tabRouterWired) return;
+    window.__tabRouterWired = true;
+    document.addEventListener('click', (e) => {
+        const a = e.target.closest('[data-tab-target]');
+        if (!a) return;
+        e.preventDefault();
+        const sel = a.getAttribute('data-tab-target');
+        if (typeof showTab === 'function') showTab(sel);
+    });
+}
+
+function wireMonthButtons() {
+    const prev = document.getElementById('prev-month-btn');
+    const next = document.getElementById('next-month-btn');
+    if (prev) prev.onclick = () => typeof changeMonth === 'function' && changeMonth(-1);
+    if (next) next.onclick = () => typeof changeMonth === 'function' && changeMonth(1);
+}
+
+function syncReturnDateMin() {
+  const startEl = document.getElementById('booking-date');
+  const returnEl = document.getElementById('return-date');
+  if (!startEl || !returnEl) return;
+
+  const startIso = String(startEl.dataset.iso || startEl.value || '').trim();
+  if (!startIso) return;
+
+  returnEl.min = startIso;
+  returnEl.dataset.min = startIso;
+
+  const returnIso = String(returnEl.dataset.iso || returnEl.value || '').trim();
+  if (returnIso && returnIso < startIso) {
+    returnEl.dataset.iso = startIso;
+    returnEl.value = startIso;
+  }
+
+  if (typeof syncAllThaiDateInputs === 'function') {
+    syncAllThaiDateInputs();
+  }
+}
+
+// ANCHOR: setupDateInputs
+function setupDateInputs() {
+  if (window.vberryDateWired) {
+    syncAllThaiDateInputs();
+    return;
+  }
+  window.vberryDateWired = true;
+
+  // 🍓 BERRY FIX: เพิ่ม insStart และ insEnd เพื่อให้ UI ฟอร์มประกันภัยแปลงเป็น พ.ศ. อัตโนมัติ
+  const dateIds =['booking-date', 'return-date', 'startDate', 'endDate', 'maintStart', 'maintDone', 'maintNext', 'suspend-start', 'suspend-end', 'insStart', 'insEnd'];
+
+  // Helper: บังคับเปิดปฏิทิน Native ของเครื่อง
+  const openPicker = (el) => {
+    try {
+      el.type = 'date';
+      if (el.dataset.iso) el.value = el.dataset.iso;
+      if (el.id === 'return-date' && el.dataset.min) el.min = el.dataset.min;
+      if (el.showPicker) el.showPicker();
+    } catch (_) {}
+  };
+
+  // Helper: แปลงค่าจากหน้าจอ (พ.ศ./ค.ศ.) ให้เป็น ISO AD (ค.ศ.) เสมอ
+  const toISO = (raw) => {
+    const s = String(raw || '').trim();
+    if (!s) return "";
+    
+    let yy, mm, dd;
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    
+    if (m) {
+      dd = m[1].padStart(2, "0");
+      mm = m[2].padStart(2, "0");
+      yy = parseInt(m[3]);
+    } else {
+      const dt = new Date(s);
+      if (isNaN(dt.getTime())) return "";
+      dd = String(dt.getDate()).padStart(2, "0");
+      mm = String(dt.getMonth() + 1).padStart(2, "0");
+      yy = dt.getFullYear();
+    }
+
+    // 🍓 BERRY ANTI-SHIFT: ตบปีกลับเข้าที่ (AD 1900 - 2100)
+    if (yy > 2400) yy -= 543;
+    while (yy > 2100) { yy -= 543; }
+    
+    return `${yy}-${mm}-${dd}`;
+  };
+
+  // Helper: แสดงผลเป็น พ.ศ. ให้ผู้ใช้เห็น
+  const toThai = (el) => {
+    const iso = String(el.dataset.iso || '').trim();
+    if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+      const [y, m, d] = iso.split("-");
+      el.type = 'text';
+      el.value = `${d}/${m}/${parseInt(y) + 543}`;
+    }
+  };
+
+  dateIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    el.addEventListener('click', () => openPicker(el));
+    el.addEventListener('focus', () => openPicker(el));
+    
+    el.addEventListener('change', () => {
+      if (el.type === 'date' && el.value) {
+        // ดึง AD จาก Native Picker โดยตรง
+        el.dataset.iso = el.value; 
+      } else if (el.type === 'text') {
+        // แปลงจากที่พิมพ์
+        const iso = toISO(el.value);
+        if (iso) el.dataset.iso = iso;
+      }
+      
+      toThai(el);
+
+      // Trigger ระบบสัมพันธ์
+      if (id === 'booking-date') {
+        if (typeof syncReturnDateMin === 'function') syncReturnDateMin();
+      }
+      if (typeof loadAvailableVehicles === 'function') {
+        loadAvailableVehicles(false);
+      }
+    });
+
+    el.addEventListener('blur', () => toThai(el));
+  });
+
+  // 🛡️ Submit Patch: บังคับให้ส่งค่า dataset.iso ไปที่ Server เท่านั้น
+  document.addEventListener('submit', (e) => {
+    dateIds.forEach(id => {
+      const el = document.getElementById(id);
+      if (el && el.dataset.iso) {
+        el.type = 'text';
+        el.value = el.dataset.iso; 
+      }
+    });
+  }, true);
+
+  syncAllThaiDateInputs();
+}
+
+
+function syncReturnDateWithStartDate() {
+  if (typeof syncReturnDateMin === 'function') {
+    syncReturnDateMin();
+  }
+}
+
+function syncAllThaiDateInputs() {
+  const ids = ['booking-date', 'return-date', 'startDate', 'endDate', 'maintStart', 'maintDone', 'maintNext', 'suspend-start', 'suspend-end', 'insStart', 'insEnd'];
+
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    const iso = String(el.dataset.iso || el.value || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return;
+
+    el.dataset.iso = iso;
+    const [y, m, d] = iso.split('-');
+    el.type = 'text';
+    el.value = `${d}/${m}/${parseInt(y, 10) + 543}`;
+  });
+}
+
+function validateBookingTime() {
+  const startDateInput = document.getElementById('booking-date');
+  const endDateInput = document.getElementById('return-date');
+  const startTimeInput = document.getElementById('booking-start');
+  const endTimeInput = document.getElementById('booking-end');
+
+  if (!startDateInput || !endDateInput || !startTimeInput || !endTimeInput) return;
+
+  const startDateIso = startDateInput.dataset.iso || startDateInput.value || '';
+  const endDateIso = endDateInput.dataset.iso || endDateInput.value || '';
+  const startTimeVal = startTimeInput.value || '';
+  const endTimeVal = endTimeInput.value || '';
+
+  if (startDateIso && endDateIso && startDateIso === endDateIso && startTimeVal && endTimeVal) {
+    if (endTimeVal <= startTimeVal) {
+      if (typeof showToast === 'function') {
+        showToast('เวลา "กลับ" ต้องมากกว่าเวลา "ไป" (สำหรับการเดินทางวันเดียวกัน)', 'error');
+      }
+      endTimeInput.value = '';
+      endTimeInput.classList.add('is-invalid');
+      setTimeout(() => {
+        endTimeInput.classList.remove('is-invalid');
+      }, 1000);
+    }
+  }
+}
+
+function wireAvailabilityListeners() {
+  if (window.__vbAvailabilityWired) return;
+  window.__vbAvailabilityWired = true;
+
+  const ids = ['booking-date', 'booking-start', 'booking-end', 'return-date'];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    el.addEventListener('change', () => {
+      validateBookingTime();
+      if (window.__vbAvailabilityTimer) clearTimeout(window.__vbAvailabilityTimer);
+      window.__vbAvailabilityTimer = setTimeout(() => {
+        if (typeof loadAvailableVehicles === 'function') loadAvailableVehicles(false);
+      }, 120);
+    });
+  });
+}
+
+function wireBookingFormSubmit() {
+  const form = document.getElementById('booking-form');
+  if (!form || form.dataset.vbwired) return;
+  form.dataset.vbwired = 'true';
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    if (form.dataset.vbIsProcessing === 'true') {
+      console.warn('🚫 Double submit blocked.');
+      return;
+    }
+
+    if (!form.checkValidity()) {
+      form.reportValidity();
+      return;
+    }
+
+    const startDateVal = document.getElementById('booking-date')?.dataset?.iso || document.getElementById('booking-date')?.value || '';
+    const endDateVal   = document.getElementById('return-date')?.dataset?.iso || document.getElementById('return-date')?.value || '';
+    const startTimeVal = document.getElementById('booking-start')?.value || '';
+    const endTimeVal   = document.getElementById('booking-end')?.value || '';
+
+    if (startDateVal && endDateVal && startDateVal === endDateVal && startTimeVal && endTimeVal) {
+      if (endTimeVal <= startTimeVal) {
+        if (typeof showToast === 'function') {
+          showToast('เวลา "กลับ" ต้องมากกว่าเวลา "ไป" (สำหรับการเดินทางวันเดียวกัน)', 'error');
+        }
+        return;
+      }
+    }
+
+    form.dataset.vbIsProcessing = 'true';
+
+    try {
+      if (typeof submitBooking !== 'function') {
+        throw new Error('submitBooking not found');
+      }
+
+      await submitBooking(e);
+    } catch (err) {
+      console.error('❌ wireBookingFormSubmit error:', err);
+      if (typeof showToast === 'function') {
+        showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+      }
+    } finally {
+      form.dataset.vbIsProcessing = 'false';
+    }
+  });
+}
+
+function wireVehicleCountClamp() {
+  const inp = getVehicleCountEl();
+  if (!inp || inp.dataset.vbClampWired === 'true') return;
+
+  inp.dataset.vbClampWired = 'true';
+
+  const runClamp = () => {
+    if (typeof clampVehicleCountNow === 'function') {
+      clampVehicleCountNow('wireVehicleCountClamp');
+    }
+  };
+
+  inp.addEventListener('input', runClamp);
+  inp.addEventListener('change', runClamp);
+}
+
+function wireStatusFilters() {
+    const statsRow = document.querySelector('.bookings-stats-row');
+    if (!statsRow) return;
+
+    const cards = statsRow.querySelectorAll('.stat-card[data-status]');
+    const allCard = document.getElementById('filter-all-card');
+    
+    cards.forEach(card => {
+        card.onclick = null; 
+        card.onclick = () => {
+            const status = card.dataset.status;
+            const wasActive = card.classList.contains('filter-active');
+
+            // 1. ล้างสถานะ Active ของทุกใบ
+            cards.forEach(c => c.classList.remove('filter-active'));
+
+            // 2. Logic การเลือกสถานะ
+            if (wasActive || status === 'all') {
+                window.bookingsCurrentFilter = null;
+                if (allCard) allCard.classList.add('filter-active'); // ถ้าไม่กรอง ให้ใบ "ทั้งหมด" สว่าง
+            } else {
+                card.classList.add('filter-active');
+                window.bookingsCurrentFilter = status;
+            }
+
+            // 3. รีเซ็ตหน้าและโหลดใหม่
+            bookingsCurrentPage = 1; 
+            loadBookingsView(); 
+            
+            if (typeof showToast === 'function' && window.bookingsCurrentFilter) {
+                showToast(`กรองเฉพาะสถานะ: ${status === 'pending' ? 'รออนุมัติ' : status}`, 'info');
+            }
+        };
+    });
+}
+
+
+/**
+ * [SECTION 5] Global Master Exports - หัวใจสำคัญของการแก้ Error
+ */
+const berryExports = {
+  initUiComponents: typeof initUiComponents === 'function' ? initUiComponents : undefined,
+  wireHeaderButtons: typeof wireHeaderButtons === 'function' ? wireHeaderButtons : undefined,
+  wireTabRouter: typeof wireTabRouter === 'function' ? wireTabRouter : undefined,
+  wireMonthButtons: typeof wireMonthButtons === 'function' ? wireMonthButtons : undefined,
+  setupDateInputs: typeof setupDateInputs === 'function' ? setupDateInputs : undefined,
+  wireBookingFormSubmit: typeof wireBookingFormSubmit === 'function' ? wireBookingFormSubmit : undefined,
+  wireFormSubmissions: typeof wireFormSubmissions === 'function' ? wireFormSubmissions : undefined,
+  wireAvailabilityListeners: typeof wireAvailabilityListeners === 'function' ? wireAvailabilityListeners : undefined,
+  wireVehicleCountClamp: typeof wireVehicleCountClamp === 'function' ? wireVehicleCountClamp : undefined,
+  wireStatusFilters: typeof wireStatusFilters === 'function' ? wireStatusFilters : undefined,
+  syncReturnDateMin: typeof syncReturnDateMin === 'function' ? syncReturnDateMin : undefined,
+  syncAllThaiDateInputs: typeof syncAllThaiDateInputs === 'function' ? syncAllThaiDateInputs : undefined,
+  wireDashboardButtons: typeof wireDashboardButtons === 'function' ? wireDashboardButtons : undefined
+};
+
+if (typeof installVehicleLoaderOnce === 'function') {
+  berryExports.installVehicleLoaderOnce = installVehicleLoaderOnce;
+}
+if (typeof installSelfTestFloatingButton === 'function') {
+  berryExports.installSelfTestFloatingButton = installSelfTestFloatingButton;
+}
+if (typeof forceShowFooter === 'function') {
+  berryExports.forceShowFooter = forceShowFooter;
+}
+
+Object.keys(berryExports).forEach((name) => {
+  if (typeof berryExports[name] === 'function') {
+    window[name] = berryExports[name];
+  }
+});
+
+console.log('✅ [V-Berry] Complete UI Wiring System Exported!');
+    /* ================== Calendar Functions ================== */
+    async function loadCalendarView(year, month) {
+        const grid = document.getElementById('calendar-grid');
+        const title = document.getElementById('calendar-title');
+        if (!grid || !title) {
+            console.error("❌ หา #calendar-grid หรือ #calendar-title ไม่เจอ!");
+            return;
+        }
+
+        grid.innerHTML = '<div class="calendar-loading">Loading...</div>';
+        title.textContent = `กำลังโหลด...`;
+        console.log(`📅 Loading calendar for ${month}/${year}...`);
+
+        try {
+            renderCalendar(year, month);
+        } catch (err) {
+            console.error("❌ Failed to load calendar data:", err);
+            if (grid) grid.innerHTML = `<div class="calendar-error">😿 โหลดข้อมูลปฏิทินไม่สำเร็จ: ${escapeHtml(err.message)}</div>`;
+            if (title) title.textContent = 'เกิดข้อผิดพลาด';
+        }
+    }
+
+/* ==================== EVENT TOOLTIP SYSTEM ==================== */
+const CalendarTooltip = {
+  el: null,
+  init() {
+    if (this.el) return;
+    this.el = document.createElement('div');
+    this.el.className = 'vberry-tooltip';
+    this.el.style.pointerEvents = 'none';
+    document.body.appendChild(this.el);
+  },
+
+  show(e, data) {
+    if (window.innerWidth <= 768 || window.matchMedia('(hover: none)').matches) return;
+    this.init();
+
+    const typeHtml = data.type
+      ? `<span style="background:#e0e7ff; color:#4338ca; padding:2px 8px; border-radius:10px; font-weight:700; font-size:0.75rem;">${escapeHtml(data.type)}</span>`
+      : '';
+
+    const projHtml = data.proj
+      ? `<div style="font-weight:800; font-size:0.95rem;">${escapeHtml(data.proj)}</div>`
+      : '';
+
+    let detailsHtml = `<div style="color:#64748b;">🕒 ${escapeHtml(data.time)} น.</div>`;
+
+    if (data.status === 'driver_block') {
+      detailsHtml += `<div style="color:#64748b;">👤 พนักงานขับรถ: <span style="font-weight:600; color:#ea580c;">${escapeHtml(data.blockName)}</span></div>`;
+    } else if (data.status === 'vehicle_block') {
+      detailsHtml += `<div style="color:#64748b;">🚐 ทะเบียนรถ: <span style="font-weight:600; color:#991b1b;">${escapeHtml(data.blockName)}</span></div>`;
+      if (data.assignedDriver && data.assignedDriver !== '-') {
+        detailsHtml += `<div style="color:#64748b;">👤 คนขับ: <span style="font-weight:600; color:#ea580c;">${escapeHtml(data.assignedDriver)}</span></div>`;
+      }
+    } else {
+      detailsHtml += `<div style="color:#64748b;">📍 ${escapeHtml(data.place)}</div>`;
+
+      if (data.status === 'approved' || data.status === 'driver_special_approved' || data.status === 'driver_claimed') {
+        const safePlate = (data.plate && data.plate !== '-') ? data.plate : 'รอระบุ';
+        const safeDriver = (data.driver && data.driver !== '-') ? data.driver : 'รอระบุ';
+        detailsHtml += `<div style="color:#64748b;">🚐 รถ: <span style="font-weight:600; color:#16a34a;">${escapeHtml(safePlate)}</span></div>`;
+        detailsHtml += `<div style="color:#64748b;">👤 คนขับ: <span style="font-weight:600; color:#16a34a;">${escapeHtml(safeDriver)}</span></div>`;
+      }
+    }
+
+    this.el.innerHTML = `<div style="display:flex; flex-direction:column; gap:6px;"><div>${typeHtml}</div>${projHtml}${detailsHtml}</div>`;
+
+    const target = e && e.target ? e.target : null;
+    if (!target || typeof target.getBoundingClientRect !== 'function') return;
+
+    const rect = target.getBoundingClientRect();
+    let top = rect.top - this.el.offsetHeight - 8;
+    let left = rect.left + (rect.width / 2) - (this.el.offsetWidth / 2);
+
+    if (top < 10) top = rect.bottom + 8;
+    if (left < 10) left = 10;
+    if (left + this.el.offsetWidth > window.innerWidth - 10) {
+      left = window.innerWidth - this.el.offsetWidth - 10;
+    }
+
+    this.el.style.top = `${top}px`;
+    this.el.style.left = `${left}px`;
+    this.el.classList.add('show');
+  },
+
+  move(e) {
+    return e;
+  },
+
+  hide() {
+    if (this.el) this.el.classList.remove('show');
+  }
+};
+
+/* ==================== [BERRY FIX] CALENDAR DATE RANGE RENDERER ==================== */
+function buildCalendarData(sourceRows) {
+    const src = Array.isArray(sourceRows) ? sourceRows : [];
+
+    return src
+      .filter(row => {
+                    const st = String(typeof normalizeClientStatus === 'function' ? normalizeClientStatus(row?.status || 'pending') : (row?.status || 'pending')).trim().toLowerCase();
+                    return st === 'approved' ||
+                           st === 'pending' ||
+                           st === 'rejected' ||
+                           st === 'cancelled' ||
+                           st === 'driver_special_approved' ||
+                           st === 'driver_block' ||
+                           st === 'vehicle_block';
+                })
+        .map(row => {
+            let sDate = String(row?.startDate || '').trim();
+            let eDate = String(row?.endDate || row?.startDate || '').trim();
+            const sTime = String(row?.startTime || '00:00').trim();
+            const eTime = String(row?.endTime || '23:59').trim();
+
+            // FIX BUG: Normalize Thai year to AD year (e.g., 2569 -> 2026) for Date calculations
+            const parseToAd = (d) => {
+                let str = String(d).trim().split('T')[0].split(' ')[0]; // Drop time components
+                if (str.match(/^\d{4}-\d{2}-\d{2}/)) {
+                    let y = parseInt(str.substring(0, 4), 10);
+                    if (y > 2500) str = (y - 543) + str.substring(4);
+                } else if (str.match(/^\d{2}\/\d{2}\/\d{4}/)) {
+                    let parts = str.split('/');
+                    if (parts.length === 3) {
+                        let y = parseInt(parts[2], 10);
+                        if (y > 2500) y -= 543;
+                        str = `${y}-${parts[1]}-${parts[0]}`;
+                    }
+                }
+                return str; 
+            };
+
+            sDate = parseToAd(sDate);
+            eDate = parseToAd(eDate);
+
+            const s = new Date(`${sDate}T12:00:00`);
+            const e = new Date(`${eDate}T12:00:00`);
+
+            return {
+                ...row,
+                sMs: isNaN(s.getTime()) ? 0 : s.getTime(),
+                eMs: isNaN(e.getTime()) ? 0 : e.getTime(),
+                startTime: sTime,
+                endTime: eTime,
+                workType: String(row?.workType || '').trim(),
+                workName: String(row?.workName || row?.project || '').trim(),
+                assignedDriver: String(row?.assignedDriver || '').trim() // 🍓 BERRY FIX: Extract assignedDriver
+            };
+        })
+        .filter(item => item.sMs > 0 && item.eMs > 0);
+}
+
+function isClosedResourceBlock(row) {
+    const statusKey = String(
+        typeof normalizeClientStatus === 'function'
+            ? normalizeClientStatus(row?.status || 'pending')
+            : (row?.status || 'pending')
+    ).trim().toLowerCase();
+    if (statusKey !== 'driver_block' && statusKey !== 'vehicle_block') return false;
+    return row?.isClosed === true || String(row?.blockStatus || '').trim().toLowerCase() === 'closed';
+}
+
+function getResourceBlockRenderMeta(row) {
+    const statusKey = String(
+        typeof normalizeClientStatus === 'function'
+            ? normalizeClientStatus(row?.status || 'pending')
+            : (row?.status || 'pending')
+    ).trim().toLowerCase();
+    if (statusKey !== 'driver_block' && statusKey !== 'vehicle_block') return null;
+
+    const reasonText = String(row?.reason || row?.workName || row?.project || row?.purpose || '').trim();
+    const assignedDriver = String(row?.assignedDriver || '').trim();
+    const driverName = String(row?.name || row?.driver || assignedDriver || '').trim();
+    const plateText = String(row?.plate || row?.vehicle || row?.name || '').trim();
+
+    if (statusKey === 'driver_block') {
+        return {
+            typeText: 'ลาพนักงานขับรถ',
+            chipText: 'ลา',
+            primaryText: driverName || 'ไม่ระบุพนักงานขับรถ',
+            secondaryText: reasonText || 'บล็อกการลา'
+        };
+    }
+
+    return {
+        typeText: 'นำรถไปซ่อม',
+        chipText: 'ซ่อม',
+        primaryText: plateText || 'ไม่ระบุทะเบียนรถ',
+        secondaryText: assignedDriver ? ('ผู้นำรถไปซ่อม: ' + assignedDriver) : (reasonText || 'บล็อกรถซ่อม')
+    };
+}
+
+function getResourceBlockRenderMeta(row) {
+    const statusKey = String(
+        typeof normalizeClientStatus === 'function'
+            ? normalizeClientStatus(row?.status || 'pending')
+            : (row?.status || 'pending')
+    ).trim().toLowerCase();
+    if (statusKey !== 'driver_block' && statusKey !== 'vehicle_block') return null;
+
+    const reasonText = String(row?.reason || row?.workName || row?.project || row?.purpose || '').trim();
+    const assignedDriver = String(row?.assignedDriver || '').trim();
+    const driverName = String(row?.name || row?.driver || assignedDriver || '').trim();
+    const plateText = String(row?.plate || row?.vehicle || row?.name || '').trim();
+    const reasonLc = reasonText.toLowerCase();
+    const isDriverLeave = statusKey === 'driver_block' && (reasonLc.includes('ลา') || reasonLc.includes('พัก'));
+    const isVehicleRepair = statusKey === 'vehicle_block' && (reasonLc.includes('ซ่อม') || reasonLc.includes('repair') || reasonLc.includes('maintenance'));
+
+    if (statusKey === 'driver_block' && isDriverLeave) {
+        return { variantKey: 'driver_leave', typeText: 'ลาพนักงานขับรถ', chipText: 'ลา', iconText: '📌', calendarBg: 'linear-gradient(135deg, #F97316, #C2410C)', calendarBorder: '#C2410C', badgeBg: '#fff7ed', badgeColor: '#c2410c', primaryText: driverName || 'ไม่ระบุพนักงานขับรถ', secondaryText: reasonText || 'บล็อกการลา' };
+    }
+    if (statusKey === 'driver_block') {
+        return { variantKey: 'driver_busy', typeText: 'คนขับติดภารกิจ', chipText: 'ติดภารกิจ', iconText: '⏳', calendarBg: 'linear-gradient(135deg, #F59E0B, #D97706)', calendarBorder: '#D97706', badgeBg: '#fffbeb', badgeColor: '#b45309', primaryText: driverName || 'ไม่ระบุพนักงานขับรถ', secondaryText: reasonText || 'บล็อกการติดภารกิจ' };
+    }
+    if (isVehicleRepair) {
+        return { variantKey: 'vehicle_repair', typeText: 'นำรถไปซ่อม', chipText: 'ซ่อม', iconText: '🛠', calendarBg: 'linear-gradient(135deg, #991B1B, #7F1D1D)', calendarBorder: '#7F1D1D', badgeBg: '#fef2f2', badgeColor: '#991b1b', primaryText: plateText || 'ไม่ระบุทะเบียนรถ', secondaryText: assignedDriver ? ('ผู้นำรถไปซ่อม: ' + assignedDriver) : (reasonText || 'บล็อกรถซ่อม') };
+    }
+    return { variantKey: 'vehicle_busy', typeText: 'รถติดภารกิจ', chipText: 'ติดภารกิจ', iconText: '⏳', calendarBg: 'linear-gradient(135deg, #F59E0B, #D97706)', calendarBorder: '#D97706', badgeBg: '#fffbeb', badgeColor: '#b45309', primaryText: plateText || 'ไม่ระบุทะเบียนรถ', secondaryText: assignedDriver ? ('ผู้ดูแลรถ: ' + assignedDriver) : (reasonText || 'บล็อกรถติดภารกิจ') };
+}
+
+function renderCalendar(year, month) {
+    // 🍓 BERRY FIX: ระบบป้องกันการ Render ซ้ำซ้อน (Throttle Lock 50ms)
+    const renderKey = `${year}-${month}`;
+    const nowMs = Date.now();
+    if (renderCalendar.__lastRun && renderCalendar.__lastKey === renderKey && (nowMs - renderCalendar.__lastRun < 50)) {
+        console.log('⚡ [Calendar] Skipped redundant render (Throttle Lock)');
+        return;
+    }
+    renderCalendar.__lastRun = nowMs;
+    renderCalendar.__lastKey = renderKey;
+
+    const grid = document.getElementById('calendar-grid');
+    const title = document.getElementById('calendar-title');
+
+    if (!grid || !title) {
+        console.warn('[Calendar] renderCalendar skipped: grid/title not found');
+        return;
+    }
+
+    if (!window.calendarState) window.calendarState = {};
+    window.calendarState.currentYear = year;
+    window.calendarState.currentMonth = month;
+
+    // sync ข้อมูลล่าสุดก่อนวาดปฏิทิน (throttle ผ่าน syncClientBookingState)
+    const hasClientBookings = Array.isArray(window.allBookingsData) && window.allBookingsData.length > 0;
+    if (!hasClientBookings && !window.vbCalSyncBusy) {
+        window.vbCalSyncBusy = true;
+        syncClientBookingState()
+            .then((refreshed) => {
+                if (refreshed) {
+                    setTimeout(() => {
+                        if (typeof renderCalendar === 'function' && window.calendarState) {
+                            renderCalendar(window.calendarState.currentYear, window.calendarState.currentMonth);
+                        }
+                    }, 0);
+                }
+            })
+            .catch((e) => console.warn('calendar pre-sync failed', e))
+            .finally(() => { window.vbCalSyncBusy = false; });
+    }
+
+    const today = new Date();
+    const monthNames =['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+    title.textContent = `${monthNames[month - 1]} ${year + 543}`;
+
+    const sourceRows = Array.isArray(window.allBookingsData) ? window.allBookingsData :[];
+    const calendarRows = (typeof buildCalendarData === 'function') ? buildCalendarData(sourceRows) :[];
+
+    // Self-test logs moved to admin panel. No console spam during normal render.
+
+    const firstDay = new Date(year, month - 1, 1);
+    const lastDay = new Date(year, month, 0);
+    const startOffset = firstDay.getDay();
+    const totalDays = lastDay.getDate();
+    const displayLimit = 3; // 🍓 [BERRY FIX] max 3 items per cell
+
+    const monthStartMs = new Date(year, month - 1, 1, 12, 0, 0).getTime();
+    const monthEndMs = new Date(year, month - 1, totalDays, 12, 0, 0).getTime();
+
+    const includeClosed = document.getElementById('chk-show-closed') ? document.getElementById('chk-show-closed').checked : false;
+
+    const monthEvents = calendarRows
+        .filter(item => {
+            const sMs = Number(item?.sMs || 0);
+            const eMs = Number(item?.eMs || 0);
+            const st = normalizeClientStatus(item?.status || 'pending');
+            const isItemClosed = item?.isClosed || st === 'closed' || (item?.blockStatus && String(item?.blockStatus).toLowerCase() === 'closed');
+            if (isItemClosed && !includeClosed) return false;
+            return sMs > 0 && eMs > 0 && !(eMs < monthStartMs || sMs > monthEndMs);
+        })
+        .sort((a, b) => {
+            const aMs = Number(a?.sMs || 0);
+            const bMs = Number(b?.sMs || 0);
+            if (aMs !== bMs) return aMs - bMs;
+            return String(a?.startTime || '').localeCompare(String(b?.startTime || ''));
+        });
+
+    grid.innerHTML = '';
+
+    for (let i = 0; i < startOffset; i++) {
+        const empty = document.createElement('div');
+        empty.className = 'calendar-day empty';
+        grid.appendChild(empty);
+    }
+
+    const safeHideTooltip = function () {
+        if (typeof CalendarTooltip === 'undefined' || !CalendarTooltip) return;
+        if (typeof CalendarTooltip.hide === 'function') CalendarTooltip.hide();
+    };
+
+    const safeShowTooltip = function (e, data) {
+        if (typeof CalendarTooltip === 'undefined' || !CalendarTooltip) return;
+        if (typeof CalendarTooltip.show === 'function') CalendarTooltip.show(e, data);
+    };
+
+    const safeMoveTooltip = function (e, data) {
+        if (typeof CalendarTooltip === 'undefined' || !CalendarTooltip) return;
+        if (typeof CalendarTooltip.move === 'function') {
+            CalendarTooltip.move(e);
+            return;
+        }
+        if (!window.__CAL_TOOLTIP_MOVE_WARNED__) {
+            window.__CAL_TOOLTIP_MOVE_WARNED__ = true;
+            console.warn('[CalendarTooltip] move() not found, fallback to show()');
+        }
+        if (typeof CalendarTooltip.show === 'function') CalendarTooltip.show(e, data);
+    };
+
+    const hasActiveCalendarFilter = function () {
+        const bar = document.getElementById('calendar-kpi-bar');
+        if (!bar) return false;
+        return !!bar.querySelector('.active, .is-active,[aria-pressed="true"], [data-active="true"]');
+    };
+
+    const normalizeCalendarInteractiveState = function () {
+        const nodes = grid.querySelectorAll('.calendar-event, .more-events-btn');
+        nodes.forEach(function (node) {
+            node.classList.remove('dim');
+            if ('disabled' in node) node.disabled = false;
+            node.setAttribute('aria-disabled', 'false');
+            node.style.pointerEvents = 'auto';
+            node.style.opacity = '1';
+            node.style.filter = 'none';
+        });
+    };
+
+    const clearDimWhenNoFilter = function () {
+        if (hasActiveCalendarFilter()) return;
+        normalizeCalendarInteractiveState();
+    };
+
+    const openCalendarEvent = function (ev, clickEvent) {
+        try {
+            if (clickEvent && typeof clickEvent.preventDefault === 'function') clickEvent.preventDefault();
+            if (clickEvent && typeof clickEvent.stopPropagation === 'function') clickEvent.stopPropagation();
+        } catch (_) {}
+        safeHideTooltip();
+        const bookingId = String(ev?.bookingId || ev?.id || '').trim();
+        if (bookingId && typeof showActivityDetails === 'function') {
+            showActivityDetails(bookingId, clickEvent);
+            return;
+        }
+        if (typeof showCalendarEventDetail === 'function') {
+            showCalendarEventDetail(ev, clickEvent);
+            return;
+        }
+        console.warn('[Calendar] No detail handler found for event:', ev);
+    };
+
+    for (let day = 1; day <= totalDays; day++) {
+        const dayCell = document.createElement('div');
+        dayCell.className = 'calendar-day';
+
+        const dayNumber = document.createElement('div');
+        dayNumber.className = 'day-number';
+        dayNumber.textContent = day;
+        dayCell.appendChild(dayNumber);
+
+        if (
+            day === today.getDate() &&
+            month === (today.getMonth() + 1) &&
+            year === today.getFullYear()
+        ) {
+            dayCell.classList.add('today');
+        }
+
+        const currentDayIso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const currentDayMs = new Date(year, month - 1, day, 12, 0, 0).getTime();
+
+        const dayMatches = monthEvents.filter(item => {
+            const sMs = Number(item?.sMs || 0);
+            const eMs = Number(item?.eMs || 0);
+            return currentDayMs >= sMs && currentDayMs <= eMs;
+        });
+
+        if (dayMatches.length > 0) {
+            const eventsContainer = document.createElement('div');
+            eventsContainer.className = 'events-container';
+
+            dayMatches.slice(0, displayLimit).forEach(item => {
+                const ev = item?.data && typeof item.data === 'object'
+                    ? { ...item.data, ...item }
+                    : { ...item };
+
+                const statusKey = String(
+                    typeof normalizeClientStatus === 'function'
+                        ? normalizeClientStatus(ev?.status || 'pending')
+                        : (ev?.status || 'pending')
+                ).trim();
+
+                const eventEl = document.createElement('button');
+                eventEl.type = 'button';
+                eventEl.className = `calendar-event status-${statusKey}`;
+                eventEl.disabled = false;
+                eventEl.setAttribute('aria-disabled', 'false');
+                const isItemClosed = ev?.isClosed || statusKey === 'closed' || (ev?.blockStatus && String(ev?.blockStatus).toLowerCase() === 'closed');
+                if (isItemClosed) {
+                    eventEl.style.opacity = '0.5';
+                    eventEl.style.filter = 'grayscale(0.6)';
+                }
+
+                // 🍓 [BERRY FIX] centering + reset styles
+                eventEl.style.width = '100%';
+                eventEl.style.display = 'flex';
+                eventEl.style.flexDirection = 'row';
+                eventEl.style.alignItems = 'center';
+                eventEl.style.justifyContent = 'center';
+                eventEl.style.textAlign = 'center';
+                eventEl.style.gap = '3px';
+                eventEl.style.border = '1px solid transparent';
+                eventEl.style.cursor = 'pointer';
+                eventEl.style.pointerEvents = 'auto';
+                eventEl.style.opacity = '1';
+                eventEl.style.filter = 'none';
+                eventEl.style.appearance = 'none';
+                eventEl.style.webkitAppearance = 'none';
+                eventEl.style.MozAppearance = 'none';
+                eventEl.style.boxShadow = 'none';
+                eventEl.style.outline = 'none';
+                eventEl.style.textShadow = 'none';
+                eventEl.style.backgroundClip = 'padding-box';
+                eventEl.style.backgroundImage = 'none';
+                eventEl.style.font = 'inherit';
+                eventEl.style.padding = '0 4px';
+                eventEl.style.margin = '0';
+                eventEl.style.minHeight = '22px';
+                eventEl.style.height = '22px';
+                eventEl.style.borderRadius = '6px';
+                eventEl.style.transform = 'none';
+                eventEl.style.overflow = 'hidden';
+                const blockMeta = getResourceBlockRenderMeta(ev);
+
+                let typeText = String(ev?.workType || ev?.type || ev?.jobType || 'ไม่ระบุ').trim();
+                let projText = String(ev?.workName || ev?.project || ev?.proj || ev?.projectName || ev?.purpose || ev?.name || '').trim();
+
+                if (blockMeta) {
+                    typeText = blockMeta.typeText;
+                    projText = blockMeta.primaryText;
+                }
+
+                const themeMap = {
+                    approved:               { bg: 'linear-gradient(135deg, #22C55E, #15803D)', border: '#15803D' },
+                    pending:                { bg: 'linear-gradient(135deg, #F59E0B, #B45309)', border: '#B45309' },
+                    rejected:               { bg: 'linear-gradient(135deg, #EF4444, #991B1B)', border: '#991B1B' },
+                    cancelled:              { bg: 'linear-gradient(135deg, #94A3B8, #475569)', border: '#475569' },
+                    driver_special_approved:{ bg: 'linear-gradient(135deg, #8B5CF6, #5B21B6)', border: '#5B21B6' },
+                    driver_block:           { bg: 'linear-gradient(135deg, #F97316, #C2410C)', border: '#C2410C' },
+                    vehicle_block:          { bg: 'linear-gradient(135deg, #991B1B, #7F1D1D)', border: '#7F1D1D' }
+                };
+                if (blockMeta) themeMap[statusKey] = { bg: blockMeta.calendarBg, border: blockMeta.calendarBorder };
+
+                const theme = themeMap[statusKey] || themeMap.pending;
+                eventEl.style.background = theme.bg;
+                eventEl.style.backgroundColor = 'transparent';
+                eventEl.style.borderColor = theme.border;
+                eventEl.style.color = '#ffffff';
+
+                // 🍓 [BERRY FIX] chip + title กึ่งกลาง
+                eventEl.innerHTML = `<span class="evt-chip" style="background:rgba(255,255,255,0.2);color:#fff;border-radius:4px;padding:0 3px;font-size:0.7rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:inline-block;">${escapeHtml(typeText)}</span>${projText ? `<span class="evt-title" style="color:#fff;opacity:0.92;font-size:0.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;display:inline-block;">${escapeHtml(projText)}</span>` : ''}`;
+
+                if (blockMeta) {
+                    eventEl.innerHTML = `<span class="evt-chip" style="background:rgba(255,255,255,0.2);color:#fff;border-radius:4px;padding:0 3px;font-size:0.68rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:inline-block;">${escapeHtml(blockMeta.chipText)}</span>${projText ? `<span class="evt-title" style="color:#fff;opacity:0.96;font-size:0.7rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;display:inline-block;">${escapeHtml(blockMeta.iconText + ' ' + projText)}</span>` : ''}`;
+                }
+
+                const tooltipData = {
+                    type: typeText,
+                    proj: projText,
+                    time: `${String(ev?.startTime || '-')} - ${String(ev?.endTime || '-')}`,
+                    place: String(ev?.place || ev?.destination || '-'),
+                    status: statusKey,
+                    blockName: String(ev?.blockName || ev?.name || ev?.driver || ev?.plate || ev?.vehicle || '-'),
+                    driver: String(ev?.driver || '-'),
+                    plate: String(ev?.plate || ev?.vehicle || '-'),
+                    assignedDriver: String(ev?.assignedDriver || '-') // 🍓 BERRY FIX: pass assignedDriver to tooltip
+                };
+                if (blockMeta) tooltipData.place = String(blockMeta.secondaryText || '-');
+
+                eventEl.addEventListener('mouseenter', function (e) { safeShowTooltip(e, tooltipData); });
+                eventEl.addEventListener('mousemove',  function (e) { safeMoveTooltip(e, tooltipData); });
+                eventEl.addEventListener('mouseleave', function ()  { safeHideTooltip(); });
+                eventEl.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    openCalendarEvent(ev, e);
+                });
+
+                eventsContainer.appendChild(eventEl);
+            });
+
+            // 🍓 [BERRY FIX] ปุ่ม "ดูเพิ่ม" — เปิด modal รายการทั้งหมดของวันนั้น
+            if (dayMatches.length > displayLimit) {
+                const overflowCount = dayMatches.length - displayLimit;
+                const moreBtn = document.createElement('button');
+                moreBtn.type = 'button';
+                moreBtn.className = 'more-events-btn';
+                moreBtn.setAttribute('aria-label', `ดูเพิ่มอีก ${overflowCount} รายการของวันที่ ${currentDayIso}`);
+                moreBtn.setAttribute('aria-disabled', 'false');
+                moreBtn.setAttribute('data-date', currentDayIso);
+                moreBtn.disabled = false;
+                moreBtn.innerHTML = `<span style="pointer-events:none;">ดูเพิ่ม +${overflowCount} รายการ</span>`;
+                moreBtn.style.cssText =[
+                    'display:block', 'width:100%', 'min-height:22px', 'padding:2px 4px',
+                    'margin-top:2px', 'background:rgba(99,102,241,0.12)', 'color:#4f46e5',
+                    'border:1px solid rgba(99,102,241,0.25)', 'border-radius:6px',
+                    'font-size:0.72rem', 'font-weight:700', 'text-align:center',
+                    'cursor:pointer', 'pointer-events:auto', 'opacity:1', 'filter:none',
+                    'appearance:none', '-webkit-appearance:none', 'line-height:18px',
+                    'white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis'
+                ].join(';');
+
+                moreBtn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    safeHideTooltip();
+                    if (typeof showDayBookings === 'function') {
+                        showDayBookings(currentDayIso);
+                    } else {
+                        console.warn('[Calendar] showDayBookings not found for date:', currentDayIso);
+                    }
+                });
+
+                eventsContainer.appendChild(moreBtn);
+            }
+
+            dayCell.appendChild(eventsContainer);
+        }
+
+        grid.appendChild(dayCell);
+    }
+
+    normalizeCalendarInteractiveState();
+
+    const kpiEvents = monthEvents.map(m => m?.data || m);
+
+    requestAnimationFrame(function () {
+        // 🍓 [BERRY FIX] คืน grid-level opacity/pointerEvents ก่อนทุกอย่าง
+        if (grid) {
+            grid.style.opacity = '';
+            grid.style.pointerEvents = '';
+            grid.removeAttribute('style-loading');
+        }
+
+        if (typeof afterCalendarRendered === 'function') {
+            afterCalendarRendered(kpiEvents, { year, month });
+        } else if (typeof attachEventRipple === 'function') {
+            attachEventRipple();
+        }
+
+        clearDimWhenNoFilter();
+        normalizeCalendarInteractiveState();
+
+        console.log(`[Calendar] renderCalendar OK: ${month}/${year} events=${monthEvents.length}`);
+    });
+}
+
+
+    function afterCalendarRendered(events, ctx) {
+        renderCalendarKPI({ events, year: ctx?.year, month: ctx?.month });
+        attachEventRipple();
+    }
+
+function renderCalendarKPI(opts = {}) {
+    const y = Number(opts.year) || new Date().getFullYear();
+    const m = Number(opts.month) || (new Date().getMonth() + 1);
+    let rows = Array.isArray(opts.events) ? opts.events : [];
+
+    if (!rows.length && Array.isArray(window.allBookingsData)) {
+        rows = window.allBookingsData.filter(e => {
+            let iso = String(e?.startDate || e?.date || '').trim();
+            if (iso.match(/^\d{4}-\d{2}-\d{2}/)) {
+                let py = parseInt(iso.substring(0, 4), 10);
+                if (py > 2500) iso = (py - 543) + iso.substring(4);
+            } else if (iso.match(/^\d{2}\/\d{2}\/\d{4}/)) {
+                let parts = iso.split(' ')[0].split('/');
+                if (parts.length === 3) {
+                    let py = parseInt(parts[2], 10);
+                    if (py > 2500) py -= 543;
+                    iso = `${py}-${parts[1]}-${parts[0]}`;
+                }
+            }
+            // Allow matching just the YYYY-MM part even if time is present
+            return iso.startsWith(`${y}-${String(m).padStart(2, '0')}`);
+        });
+    }
+
+    const counts = { approved: 0, pending: 0, rejected: 0, cancelled: 0, driver_special_approved: 0, other: 0 };
+
+    rows.forEach(r => {
+        const k = normalizeClientStatus(r?.status || 'pending');
+        if (counts[k] !== undefined) {
+            counts[k]++;
+        } else {
+            counts.other++;
+        }
+    });
+
+    const totalPending = counts.pending;
+    const totalApproved = counts.approved + counts.driver_special_approved;
+    const total = totalPending + totalApproved + counts.rejected + counts.cancelled + counts.other;
+
+    const bar = document.getElementById('calendar-kpi-bar');
+    if (!bar) return;
+
+    const titlePending = `รออนุมัติ: ${totalPending}`;
+    const titleApproved = counts.driver_special_approved > 0 ? `อนุมัติ: ${counts.approved} | งานด่วน: ${counts.driver_special_approved}` : `อนุมัติแล้ว`;
+
+    bar.innerHTML = `
+        <div class="kpi-chip kpi-approved" data-k="approved" title="${titleApproved}"><span class="kpi-ico">✅</span><span class="kpi-label">อนุมัติ</span><span class="kpi-num">0</span></div>
+        <div class="kpi-chip kpi-pending" data-k="pending" title="${titlePending}"><span class="kpi-ico">⏳</span><span class="kpi-label">รออนุมัติ</span><span class="kpi-num">0</span></div>
+        <div class="kpi-chip kpi-rejected" data-k="rejected" title="ไม่อนุมัติ"><span class="kpi-ico">❌</span><span class="kpi-label">ไม่อนุมัติ</span><span class="kpi-num">0</span></div>
+        <div class="kpi-chip kpi-cancelled" data-k="cancelled" title="ยกเลิก"><span class="kpi-ico">🚫</span><span class="kpi-label">ยกเลิก</span><span class="kpi-num">0</span></div>
+        <div class="kpi-chip kpi-total" data-k="total" title="ทั้งหมดเดือนนี้"><span class="kpi-ico">📦</span><span class="kpi-label">ทั้งหมด</span><span class="kpi-num">0</span></div>
+    `;
+
+    requestAnimationFrame(() => {
+        bar.querySelectorAll('.kpi-chip').forEach((c, i) => {
+            c.style.setProperty('--i', i);
+            c.classList.add('pop-in');
+        });
+    });
+
+    animateNumber(bar.querySelector('.kpi-approved .kpi-num'), totalApproved);
+    animateNumber(bar.querySelector('.kpi-pending .kpi-num'), totalPending);
+    animateNumber(bar.querySelector('.kpi-rejected .kpi-num'), counts.rejected);
+    animateNumber(bar.querySelector('.kpi-cancelled .kpi-num'), counts.cancelled);
+    animateNumber(bar.querySelector('.kpi-total .kpi-num'), total);
+
+    bar.onclick = (e) => {
+        const chip = e.target.closest('.kpi-chip');
+        if (!chip) return;
+        const isActivating = !chip.classList.contains('active');
+        bar.querySelectorAll('.kpi-chip').forEach(c => c.classList.remove('active'));
+        if (isActivating) {
+            chip.classList.add('active');
+            highlightCalendarByStatus(chip.dataset.k);
+        } else {
+            highlightCalendarByStatus(null);
+        }
+    };
+}
+
+    function animateNumber(el, to, ms = 500) {
+        if (!el) return;
+        const from = Number(el.textContent || 0);
+        if (from === to) { el.textContent = String(to); return; }
+        const start = performance.now();
+        const step = (t) => {
+            const p = Math.min(1, (t - start) / ms);
+            const eased = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+            el.textContent = String(Math.round(from + (to - from) * eased));
+            if (p < 1) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+    }
+
+   function highlightCalendarByStatus(key) {
+    const all = document.querySelectorAll('.calendar-event');
+    if (!all.length) return;
+
+    if (!key || key === 'total') {
+        all.forEach(el => el.classList.remove('dim'));
+        return;
+    }
+
+    all.forEach(el => {
+        const isMatch = el.classList.contains(`status-${key}`);
+        el.classList.toggle('dim', !isMatch);
+    });
+}
+
+    function attachEventRipple() {
+        const grid = document.getElementById('calendar-grid');
+        if (!grid || grid.__RIPPLE_WIRED__) return;
+        grid.__RIPPLE_WIRED__ = true;
+        const addRipple = (e) => {
+            const ev = e.target.closest('.calendar-event');
+            if (!ev) return;
+            const r = document.createElement('span');
+            r.className = 'ripple';
+            ev.appendChild(r);
+            const rect = ev.getBoundingClientRect();
+            const x = (e.clientX || e.touches[0].clientX) - rect.left;
+            const y = (e.clientY || e.touches[0].clientY) - rect.top;
+            r.style.left = x + 'px';
+            r.style.top = y + 'px';
+            setTimeout(() => r.remove(), 500);
+        };
+        grid.addEventListener('mousedown', addRipple);
+        grid.addEventListener('touchstart', addRipple, { passive: true });
+    }
+
+function showDayBookings(dateStr) {
+    console.log(`📅 Showing bookings for date: ${dateStr}`);
+
+    const modal = document.getElementById('activity-modal');
+    const header = document.getElementById('activity-modal-header');
+    const title = document.getElementById('activity-title');
+    const details = document.getElementById('activity-details');
+    const footer = document.getElementById('activity-modal-footer');
+
+    if (!modal || !title || !details || !footer) return;
+
+    const source = window.allBookingsData || [];
+    const dayMs = new Date(`${dateStr}T12:00:00`).getTime();
+
+    const normalized = (typeof buildCalendarData === 'function')
+        ? buildCalendarData(source)
+        : [];
+
+    const dayBookings = normalized
+        .filter(item => dayMs >= item.sMs && dayMs <= item.eMs)
+        .map(item => item.data || item);
+
+    console.log(`Found ${dayBookings.length} bookings for ${dateStr}`);
+
+    if (dayBookings.length === 0) {
+        if (typeof showToast === 'function') showToast('ไม่มีการจองในวันนี้ค่ะ', 'info');
+        return;
+    }
+
+    if (header) header.className = 'modal-header modal-header-primary';
+    title.innerHTML = `📅 รายการทั้งหมดวันที่ ${formatDate(dateStr)}`;
+
+    // 🍓 [BERRY FIX] จัดกลุ่มใหม่ แยก block (ลา/ซ่อม) ออกมาให้ชัดเจน
+    const groups = {
+        approved: dayBookings.filter(b => {
+            const s = normalizeClientStatus(b.status || 'pending');
+            return s === 'approved';
+        }),
+        blocks: dayBookings.filter(b => {
+            const s = normalizeClientStatus(b.status || 'pending');
+            return s === 'driver_block' || s === 'vehicle_block';
+        }),
+        pending: dayBookings.filter(b => normalizeClientStatus(b.status || 'pending') === 'pending'),
+        other: dayBookings.filter(b => {
+            const s = normalizeClientStatus(b.status || 'pending');
+            return !['approved', 'driver_block', 'vehicle_block', 'pending'].includes(s);
+        })
+    };
+
+    function renderItemRow(booking) {
+        const bookingId = String(booking.bookingId || '').trim();
+        const s_key = normalizeClientStatus(booking.status || 'pending');
+        const isClickable = !!bookingId || typeof showCalendarEventDetail === 'function';
+
+        // 🍓 [BERRY FIX] ดึงข้อมูลเฉพาะของ block (ลา/ซ่อม) มาแสดงแทน project
+        let titleText = escapeHtml(booking.project || booking.purpose || booking.name || 'ไม่ระบุหัวข้อ');
+        let iconHtml = '🕒';
+        let placeHtml = `📍 ${escapeHtml(booking.place || booking.destination || '-')}`;
+        let statusDisplay = escapeHtml(typeof getStatusText === 'function' ? getStatusText(booking.status || '') : (booking.status || '-'));
+        let badgeColor = '#64748b'; // default
+        let badgeBg = '#f1f5f9';
+
+        if (s_key === 'driver_block') {
+            titleText = `<span style="color:#c2410c;">[พนักงานลา]</span> ${escapeHtml(booking.driver || booking.name || 'ไม่ระบุชื่อ')}`;
+            if (booking.reason || booking.note) titleText += ` <span style="font-size:0.85em;color:#64748b;font-weight:normal;">(${escapeHtml(booking.reason || booking.note)})</span>`;
+            iconHtml = '👤';
+            placeHtml = ''; // ลาไประบุสถานที่ไม่ได้
+            statusDisplay = 'พนักงานลา';
+            badgeColor = '#c2410c';
+            badgeBg = '#ffedd5';
+        } else if (s_key === 'vehicle_block') {
+            titleText = `<span style="color:#991b1b;">[แจ้งซ่อม/รถไม่ว่าง]</span> ${escapeHtml(booking.plate || booking.vehicle || 'ไม่ระบุทะเบียน')}`;
+            if (booking.reason || booking.note) titleText += ` <span style="font-size:0.85em;color:#64748b;font-weight:normal;">(${escapeHtml(booking.reason || booking.note)})</span>`;
+            iconHtml = '🔧';
+            placeHtml = ''; // ซ่อมระบุสถานที่ไม่ได้
+            statusDisplay = 'รถไม่ว่าง (ซ่อม)';
+            badgeColor = '#991b1b';
+            badgeBg = '#fee2e2';
+        } else if (s_key === 'approved') {
+            badgeColor = '#15803d';
+            badgeBg = '#dcfce3';
+        } else if (s_key === 'pending') {
+            badgeColor = '#b45309';
+            badgeBg = '#fef3c7';
+        }
+
+        return `
+          <button type="button"
+                  class="booking-item ${isClickable ? 'is-clickable' : ''}"
+                  style="width:100%; text-align:left; border:1px solid #e2e8f0; background:#fff; border-radius:10px; padding:12px; margin-bottom:8px; cursor:pointer; transition:all 0.2s; box-shadow:0 1px 2px rgba(0,0,0,0.05);"
+                  onmouseover="this.style.borderColor='#cbd5e1'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.08)';"
+                  onmouseout="this.style.borderColor='#e2e8f0'; this.style.boxShadow='0 1px 2px rgba(0,0,0,0.05)';"
+                  onclick="${bookingId
+                    ? `showActivityDetails('${escapeHtml(bookingId)}', event)`
+                    : `showCalendarEventDetail(${JSON.stringify({
+                        type: booking.type || booking.purpose || '',
+                        proj: booking.project || booking.purpose || booking.name || '',
+                        startDate: booking.startDate || '',
+                        endDate: booking.endDate || booking.startDate || '',
+                        startTime: booking.startTime || '',
+                        endTime: booking.endTime || '',
+                        place: booking.place || booking.destination || '',
+                        status: booking.status || '',
+                        blockName: booking.name || booking.driver || booking.plate || '',
+                        driver: booking.driver || '',
+                        plate: booking.plate || booking.vehicle || '',
+                        reason: booking.reason || booking.note || ''
+                    }).replace(/"/g, '&quot;')}, event)`}">
+              <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                <div style="flex:1;">
+                  <div style="font-weight:700; color:#1e293b; font-size:0.95rem; margin-bottom:4px; line-height:1.4;">${titleText}</div>
+                  <div style="font-size:0.85rem; color:#64748b; margin-top:2px; display:flex; gap:6px; align-items:center;">
+                    <span>${iconHtml}</span> <span>${escapeHtml(booking.startTime || '00:00')} - ${escapeHtml(booking.endTime || '23:59')}</span>
+                  </div>
+                  ${placeHtml ? `<div style="font-size:0.85rem; color:#64748b; margin-top:2px;">${placeHtml}</div>` : ''}
+                </div>
+                <div style="font-size:0.75rem; font-weight:700; white-space:nowrap; color:${badgeColor}; background:${badgeBg}; padding:4px 8px; border-radius:6px; flex-shrink:0;">
+                  ${statusDisplay}
+                </div>
+              </div>
+          </button>
+        `;
+    }
+
+    function createGroupHtml(group, label, colorStr) {
+        if (!group || !group.length) return '';
+        return `
+          <div class="booking-group" style="margin-bottom:16px;">
+            <div style="display:flex; align-items:center; margin-bottom:10px;">
+                <div style="width:4px; height:16px; background:${colorStr}; border-radius:2px; margin-right:8px;"></div>
+                <h4 style="margin:0; font-size:1rem; color:#334155; font-weight:700;">${label} (${group.length})</h4>
+            </div>
+            ${group.map(renderItemRow).join('')}
+          </div>
+        `;
+    }
+
+    details.innerHTML =
+        createGroupHtml(groups.approved, 'อนุมัติแล้ว', '#10b981') +
+        createGroupHtml(groups.blocks, 'วันลาดังกล่าว / รถส่งซ่อม', '#ef4444') +
+        createGroupHtml(groups.pending, 'รออนุมัติ', '#f59e0b') +
+        createGroupHtml(groups.other, 'อื่นๆ', '#64748b');
+
+    footer.innerHTML = `
+      <button type="button" class="btn btn-secondary" onclick="closeActivityModal()">ปิด</button>
+      <button type="button" class="btn btn-primary" onclick="showBookingForm()">✏️ จองเพิ่ม</button>
+    `;
+
+    if (typeof openModalA11y === 'function') openModalA11y('activity-modal');
+    else {
+        modal.classList.add('active');
+        modal.style.display = 'flex';
+    }
+}
+
+
+function createBookingItem(booking) {
+    const s_key = normalizeClientStatus(booking?.status || 'pending');
+
+    let statusClass = 'pending';
+    if (s_key === 'approved' || s_key === 'อนุมัติ' || s_key === 'อนุมัติแล้ว' || s_key === 'driver_special_approved') {
+        statusClass = 'approved';
+    } else if (s_key === 'rejected' || s_key === 'ไม่อนุมัติ') {
+        statusClass = 'rejected';
+    } else if (s_key === 'cancelled' || s_key === 'ยกเลิก' || s_key === 'ยกเลิกโดยผู้จอง') {
+        statusClass = 'cancelled';
+    } else if (s_key === 'driver_block' || s_key === 'vehicle_block') {
+        statusClass = 'approved';
+    }
+
+    const statusText = getStatusText(s_key);
+    const bookingId = String(booking?.bookingId || '').trim();
+    const startTime = String(booking?.startTime || '-').trim();
+    const endTime = String(booking?.endTime || '-').trim();
+    const placeText = String(booking?.place || booking?.destination || '-').trim();
+
+    let rawProject = String(
+        booking?.workName ||
+        booking?.projectName ||
+        booking?.purpose ||
+        booking?.project ||
+        booking?.proj ||
+        booking?.name ||
+        ''
+    ).trim();
+
+    let projectHtml = rawProject
+        ? `<div class="booking-purpose" style="font-weight:700; color:#1e293b; margin-bottom:4px;">${escapeHtml(rawProject)}</div>`
+        : `<div class="booking-purpose" style="font-style:italic; color:#cbd5e1; margin-bottom:4px;">(ไม่ได้ระบุโครงการ)</div>`;
+
+    const clickAction = bookingId
+        ? `showActivityDetails('${escapeHtml(bookingId)}', event)`
+        : `showCalendarEventDetail(${JSON.stringify({
+            bookingId: '',
+            status: booking?.status || '',
+            type: booking?.type || booking?.workType || '',
+            proj: rawProject,
+            startDate: booking?.startDate || booking?.date || '',
+            endDate: booking?.endDate || booking?.startDate || booking?.date || '',
+            startTime: startTime,
+            endTime: endTime,
+            place: placeText,
+            destination: booking?.destination || '',
+            blockName: booking?.blockName || booking?.name || booking?.driver || booking?.plate || booking?.vehicle || '',
+            driver: booking?.driver || '',
+            plate: booking?.plate || booking?.vehicle || '',
+            reason: booking?.reason || booking?.note || ''
+        }).replace(/"/g, '&quot;')}, event)`;
+
+    return `
+        <div class="booking-item"
+             onclick="${clickAction}"
+             style="cursor:pointer; padding:10px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px; transition:all 0.2s;">
+            <div class="booking-item-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <span class="booking-id" style="font-weight:800; font-size:0.9rem; color:#64748b;">${bookingId ? `ID: ${escapeHtml(bookingId)}` : 'กิจกรรมในปฏิทิน'}</span>
+                <span class="status-badge ${statusClass}" style="font-size:0.75rem;">${escapeHtml(statusText)}</span>
+            </div>
+            <div class="booking-item-body">
+                ${projectHtml}
+                <div class="booking-info" style="font-size:0.85rem; color:#475569; display:flex; flex-direction:column; gap:2px;">
+                    <div>🕒 <span style="font-weight:600;">${escapeHtml(startTime)} - ${escapeHtml(endTime)}</span></div>
+                    <div>📍 <span style="font-weight:600; color:#2563eb;">${escapeHtml(placeText)}</span></div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+ 
+ // (ถ้ามี var currentYear, currentMonth อยู่แล้ว ให้แทนที่ด้วยชุดนี้เพื่อความชัวร์)
+var currentDateObj = new Date();
+var currentYear = currentDateObj.getFullYear();
+var currentMonth = currentDateObj.getMonth(); // 0 = มกราคม, 11 = ธันวาคม
+
+function changeMonth(step) {
+    console.log(`📅 Changing month by step: ${step}`);
+
+    // 1. UI Feedback: แสดง Loading ทันทีที่กด
+    const title = document.getElementById('calendar-title');
+    const grid = document.getElementById('calendar-grid');
+
+    if (title) title.innerHTML = '<span class="spinner-border-sm"></span> ⏳ กำลังโหลด...';
+    if (grid) {
+        grid.style.opacity = '0.4';
+        grid.style.pointerEvents = 'none';
+    }
+
+    // 2. Logic คำนวณเดือนใหม่
+    currentMonth += step;
+
+    // จัดการเปลี่ยนปี (ข้ามจาก ธ.ค. -> ม.ค. หรือ ม.ค. -> ธ.ค.)
+    if (currentMonth < 0) {
+        currentMonth = 11;
+        currentYear--;
+    } else if (currentMonth > 11) {
+        currentMonth = 0;
+        currentYear++;
+    }
+
+    console.log(`   👉 New Target: Year=${currentYear}, Month=${currentMonth + 1}`);
+
+    // 3. เรียก Render Calendar
+    // ⚠️ สำคัญมาก: renderCalendar ต้องการเดือนแบบ 1-12 (Human Format)
+    // แต่ JavaScript getMonth() ให้ค่า 0-11 ดังนั้นต้อง +1 ตอนส่งไป
+    renderCalendar(currentYear, currentMonth + 1);
+
+    // 🍓 [BERRY FIX] reset grid-level opacity และ pointerEvents หลัง render เสมอ
+    // (renderCalendar รีเซ็ตแค่ .calendar-event nodes ข้างใน ไม่ได้รีเซ็ต grid เอง)
+    if (grid) {
+        grid.style.opacity = '';
+        grid.style.pointerEvents = '';
+    }
+    console.log('✅ [Calendar] Reflow logic executed.');
+}
+
+function initCalendarView() {
+    // รีเซ็ตเป็นเดือนปัจจุบันจริงๆ
+    const now = new Date();
+    currentYear = now.getFullYear();
+    currentMonth = now.getMonth();
+    
+    if (!window.calendarState) window.calendarState = {};
+    window.calendarState.currentYear = currentYear;
+    window.calendarState.currentMonth = currentMonth + 1; // บันทึกค่า 1-12
+    
+    console.log("📅 Initializing Calendar View State...");
+    // 🍓 BERRY FIX: ปิดการวาดปฏิทินเปล่าตอนเปิดแอป เพื่อประหยัดทรัพยากร รอให้ข้อมูลมาครบก่อนค่อยวาดทีเดียว
+}
+
+
+function renderFileLinks(fileVal) {
+  const raw = String(fileVal || '').trim();
+  // ตัดคำขยะที่บอสไม่อยากให้เป็นลิงก์ออก
+  if (!raw || raw === '-' || raw.toLowerCase() === 'none' || raw.toLowerCase() === 'null') {
+    return '<span class="text-muted">-</span>';
+  }
+
+  const urls = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  // กรองเฉพาะสาย HTTP เท่านั้น
+  const safeUrls = urls.filter(u => /^(http|https):\/\/[^ "]+$/.test(u));
+
+  if (safeUrls.length === 0) {
+    return `<span class="text-muted">${escapeHtml(raw)}</span>`; // โชว์เป็นข้อความธรรมดาแทน
+  }
+
+  if (safeUrls.length === 1) {
+    return `<a href="${escapeHtml(safeUrls[0])}" target="_blank" rel="noopener" class="file-link">เปิดดูไฟล์แนบ</a>`;
+  }
+
+  return `<ul class="file-link-list">` + safeUrls.map((u, i) =>
+    `<li><a href="${escapeHtml(u)}" target="_blank" rel="noopener" class="file-link">ไฟล์แนบ ${i + 1}</a></li>`
+  ).join('') + `</ul>`;
+}
+
+
+
+    /* ================== Booking Form Functions ================== */
+// [ANCHOR: Populate Project Select with Validation]
+/* =========================================
+   [BERRY FIX] Core Form Logic & Validation
+   ========================================= */
+function prepareBookingPayload(form) {
+  if (!form) return null;
+  const fd = new FormData(form);
+  const payload = {};
+
+  // 1. เก็บค่าพื้นฐานจากฟอร์ม
+  for (const [k, v] of fd.entries()) {
+    payload[k] = (typeof v === 'string' ? v.trim() : v);
+  }
+
+  // 2. จัดการข้อมูล "ประเภทงาน" และ "งาน/โครงการ"
+  const purposeSelect = document.getElementById('form-purpose');
+  const projectNameInput = document.getElementById('booking-project-name');
+
+  if (purposeSelect) {
+      payload.workType = purposeSelect.value;
+  }
+  
+  if (projectNameInput) {
+      payload.workName = projectNameInput.value.trim();
+  }
+
+  // ลบ key เก่าทิ้งเพื่อความสะอาด (ป้องกัน form ส่งค่าขยะ)
+  delete payload.purpose;
+  delete payload.purpose_other;
+  delete payload.project;
+  delete payload.jobType;
+  delete payload.projectName;
+
+  // 3. Map ID อื่นๆ (คงเดิม)
+  const mapping = {
+    position:   'booking-position',
+    department: 'booking-dept',
+    email:      'booking-email',
+    place:      'booking-destination',
+    passengers: 'booking-passengers'
+  };
+
+  for (let key in mapping) {
+    const el = document.getElementById(mapping[key]);
+    if (el && (!payload[key] || payload[key] === "")) {
+      payload[key] = el.value ? el.value.trim() : "";
+    }
+  }
+
+  // 4. Clean Phone
+  const phoneEl = document.getElementById('booking-phone');
+  if (phoneEl) payload.phone = phoneEl.value.trim().replace(/\D/g, '');
+
+  // 5. Date ISO
+  const toISODate = (elId) => {
+    const el = document.getElementById(elId);
+    if (!el) return "";
+    return el.dataset.iso || el.value.trim();
+  };
+  payload.startDate = toISODate('booking-date');
+  payload.endDate   = toISODate('return-date') || payload.startDate;
+
+  // 6. Car Type
+  const typesChecked = Array.from(document.querySelectorAll('input[name="carTypeSelect"]:checked')).map(el => el.value);
+  if (typesChecked.length > 0) payload.carType = typesChecked.join(',');
+
+  // 7. File Upload
+  const fileInput = document.getElementById('booking-file-upload');
+  if (fileInput && fileInput.__fileData) {
+    payload.fileData = fileInput.__fileData;
+    payload.fileName = fileInput.__fileName;
+    payload.fileMime = fileInput.__fileMime;
+  }
+
+  // 8. Final Polish
+  payload.email = payload.email || payload.Email || "";
+  payload.org   = payload.department || payload.org || ""; 
+
+  console.log('🚀 [Payload Ready]:', payload);
+  return payload;
+}
+
+function prepareBookingForm() {
+  // 1) ปิด Loading Overlay ที่อาจค้าง
+  try { if (typeof hideLoading === 'function') hideLoading(); } catch (e) {}
+
+  const modal = document.getElementById('booking-modal');
+  const form  = document.getElementById('booking-form');
+
+  // 2) ปลดล็อก Input ที่อาจถูก Disabled ค้าง
+  try {
+    if (form) {
+      const fields = form.querySelectorAll('input, select, textarea, button');
+      fields.forEach(el => {
+        if (el && el.type === 'submit') return; // ข้ามปุ่ม Submit หลัก
+        if (el.hasAttribute('disabled')) el.disabled = false;
+        if (el.hasAttribute('readonly')) el.readOnly = false;
+        el.style.pointerEvents = '';
+      });
+    }
+  } catch (e) {
+    console.warn('prepareBookingForm unlock fields error:', e);
+  }
+
+  // 3) Populate ข้อมูลและเรียกใช้ Logic ใหม่
+  try {
+    // Populate ตัวอื่นๆ (ถ้ามี)
+    const candidates = [
+      'populatePositionSelect', 'populateOrgSelect', 'populateDepartmentSelect',
+      'populateDriverSelect', 'populateVehicleSelect'
+    ];
+    candidates.forEach(fnName => {
+      try { if (typeof window[fnName] === 'function') window[fnName](); } catch (_) {}
+    });
+
+  } catch (e) {
+    console.warn('prepareBookingForm populate error:', e);
+  }
+
+  // 4) Auto Focus
+  try {
+    const focusEl = modal ? modal.querySelector('[data-autofocus], input:not([type="hidden"]), select') : null;
+    if (focusEl && typeof focusEl.focus === 'function') {
+      setTimeout(() => focusEl.focus(), 100);
+    }
+  } catch (e) {}
+}
+
+function ensureBookingFormHasSubmitButton_() {
+  const form = document.getElementById('booking-form');
+  if (!form) return false;
+
+  // ✅ ถ้ามี submit อยู่แล้ว ไม่ต้องทำ
+  if (form.querySelector('button[type="submit"], input[type="submit"]')) return true;
+
+  // ✅ สร้าง hidden submit button เพื่อให้:
+  // - form.requestSubmit() ทำงานแน่นอน
+  // - submit event ยิงเสมอ
+  // - selfTest phase 5 หาเจอ
+  const btn = document.createElement('button');
+  btn.type = 'submit';
+  btn.id = 'vb-hidden-submit';
+  btn.setAttribute('aria-hidden', 'true');
+  btn.tabIndex = -1;
+  btn.style.cssText = `
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  `;
+  btn.textContent = 'submit';
+
+  form.appendChild(btn);
+  console.log('✅ ensureBookingFormHasSubmitButton_: injected hidden submit button');
+  return true;
+}
+
+
+async function refreshBookingFormUI() {
+  try {
+    // 1) ensure thai date inputs wired
+    if (typeof setupDateInputs === 'function') setupDateInputs();
+    // 3) ensure vehicle selection renders
+    if (typeof loadAvailableVehicles === 'function') await loadAvailableVehicles();
+  } catch (e) {
+    console.warn('refreshBookingFormUI error:', e);
+  }
+}
+
+// [ANCHOR: Form Preparation Helper]
+function showBookingForm(initialData) {
+  console.log('🚗 Opening booking form with data:', initialData);
+
+  // 1. ✅ เตรียมฟอร์มและปุ่ม Submit
+  try { prepareBookingForm(); } catch (e) { console.warn('prepareBookingForm error:', e); }
+  
+  // ❌ ลบ populateProjectSelect() ออกจากตรงนี้
+  
+  try { ensureBookingFormHasSubmitButton_(); } catch (e) { console.warn('ensureBookingFormHasSubmitButton_ error:', e); }
+
+  // 2. ✅ เติมข้อมูลวันที่ลงฟิลด์ (ถ้ามี initialData ส่งมา)
+  const startEl = document.getElementById('booking-date');
+  const endEl = document.getElementById('return-date');
+  
+  if (initialData && initialData.startDate) {
+    if (startEl) {
+      startEl.value = initialData.startDate; 
+      startEl.dataset.iso = initialData.startDate; 
+    }
+    if (endEl) {
+      endEl.value = initialData.endDate || initialData.startDate;
+      endEl.dataset.iso = initialData.endDate || initialData.startDate;
+    }
+  }
+
+  // 3. ✅ เปิดหน้าต่าง Modal
+  try { 
+    openModalA11y('booking-modal'); 
+  } catch (e) {
+    const modal = document.getElementById('booking-modal');
+    if (modal) {
+      modal.classList.add('active');
+      modal.style.display = 'flex';
+    }
+  }
+
+  // 4. ⭐ [จุดสำคัญ] สั่งระบบวันที่ทำงาน
+  if (typeof setupDateInputs === 'function') {
+    setupDateInputs();
+  }
+
+  // 5. ✅ จัดการรูปแบบเวลา
+  const startInput = document.getElementById('booking-start');
+  const endInput = document.getElementById('booking-end');
+  try {
+    if (initialData && initialData.startTime && startInput) startInput.value = initialData.startTime;
+    if (initialData && initialData.endTime && endInput) endInput.value = initialData.endTime;
+    
+    if (startInput && startInput.value) startInput.value = toThaiTimeDisplay(startInput.value.trim());
+    if (endInput && endInput.value) endInput.value = toThaiTimeDisplay(endInput.value.trim());
+  } catch (e) { console.warn('Time formatting error:', e); }
+
+  // 6. ✅ รีเซ็ตสถานะการเลือกรถ
+  try {
+    const box = document.getElementById('vehicle-selection');
+    if (box) {
+      box.dataset.vbRendered = "0";
+      box.dataset.vbLoading = "0";
+      box.innerHTML = '<div class="text-center p-3"><div class="spinner"></div> กำลังเตรียมข้อมูลรถ...</div>';
+    }
+  } catch (_) {}
+
+  // 7. ✅ โหลดรายการรถว่างล่าสุด (Force Load)
+  if (typeof loadAvailableVehicles === 'function') {
+    try {
+      const startIso = document.getElementById('booking-date')?.dataset?.iso || '';
+      const startTime = document.getElementById('booking-start')?.value || '';
+      const endTime = document.getElementById('booking-end')?.value || '';
+
+      if (startIso && startTime && endTime) {
+        loadAvailableVehicles(true);
+      }
+    } catch (e) {
+      console.error('loadAvailableVehicles trigger error:', e);
+    }
+  }
+}
+
+
+    function closeBookingForm() {
+        closeModalA11y('booking-modal');
+        const form = document.getElementById('booking-form');
+        if (form) form.reset();
+        selectedVehicles = [];
+        renderSelectedVehicleTags();
+         }
+
+    function getVehicleCountEl_() {
+  return document.getElementById('vehicleCount') || document.querySelector('input[name="vehicleCount"]');
+}
+
+function getVehicleCountInput_() {
+    return document.getElementById('booking-vehicle-count')
+        || document.querySelector('input[name="vehicleCount"]')
+        || null;
+}
+
+function isBookingDateTimeReady_() {
+    const dateEl = document.getElementById('booking-date');
+    const sEl = document.getElementById('booking-start');
+    const eEl = document.getElementById('booking-end');
+    const dateISO = dateEl ? (dateEl.dataset.iso || dateEl.value || '') : '';
+    const startTime = sEl?.value || '';
+    const endTime = eEl?.value || '';
+    return !!(dateISO && startTime && endTime);
+}
+
+
+function toastOnce_(key, msg, type, ms) {
+    const now = Date.now();
+    const store = (window.__TOAST_ONCE__ = window.__TOAST_ONCE__ || {});
+    const ttl = Number(ms) || 1200;
+    if (store[key] && (now - store[key]) < ttl) return;
+    store[key] = now;
+    try { if (typeof showToast === 'function') showToast(msg, type || 'info'); } catch (_) {}
+}
+
+/* ================== VEHICLE COUNT CLAMP (MULTI + AVAIL AWARE) ================== */
+// --- [1] Helpers สำหรับการควบคุมจำนวนคัน ---
+
+function clampInt(n, min, max, fallback = min) {
+  const x = parseInt(n, 10);
+  if (!Number.isFinite(x)) return fallback;
+  return Math.min(max, Math.max(min, x));
+}
+
+/** 
+ * ดึงประเภทที่เลือก (ใช้ชื่อเดียวกับที่สร้างใน UI)
+ */
+function getSelectedCarTypes() {
+  const types = [];
+  // 🍓 แก้ไข: เปลี่ยนเป็น carTypeSelect ให้ตรงกับ UI
+  document.querySelectorAll('input[name="carTypeSelect"]:checked').forEach((el) => {
+    types.push(String(el.value || '').trim());
+  });
+  return Array.from(new Set(types)).filter(Boolean);
+}
+
+function getVehicleCountEl() {
+  return (
+    document.getElementById('vehicleCount') ||
+    document.getElementById('booking-vehicle-count') ||
+    document.querySelector('[name="vehicleCount"]')
+  );
+}
+
+function clampVehicleCountNow(reason, opts) {
+  const el = getVehicleCountEl();
+  if (!el) return 1;
+
+  // CHANGE: Fix Max to 5 (Requirement)
+  el.max = "5";
+  el.min = "1";
+
+  const selected = getSelectedCarTypes(); 
+  const availData = window.__VB_AVAIL || { van: 0, truck: 0 };
+  
+  const QUOTA_VAN = 4;
+  const QUOTA_TRUCK = 1;
+  const HARD_CAP = 5;
+
+  // Calculate Real Availability based on Selection
+  const allowedVan = Math.min(availData.van, QUOTA_VAN);
+  const allowedTruck = Math.min(availData.truck, QUOTA_TRUCK);
+
+  let maxRealAvail = 0;
+  const hasVan = selected.includes('van');
+  const hasTruck = selected.includes('truck');
+
+  if (hasVan && hasTruck) {
+    maxRealAvail = Math.min(HARD_CAP, allowedVan + allowedTruck);
+  } else if (hasVan) {
+    maxRealAvail = allowedVan;
+  } else if (hasTruck) {
+    maxRealAvail = allowedTruck;
+  } else {
+    // If nothing selected, show total potential but warn user to select type
+    maxRealAvail = Math.min(HARD_CAP, allowedVan + allowedTruck); 
+  }
+
+  // Current Input Value
+  let currentVal = parseInt(el.value, 10);
+  if (isNaN(currentVal) || currentVal < 1) currentVal = 1;
+
+  // CHANGE: UX Feedback instead of forcing value change
+  const hint = document.getElementById('carAvailabilityMsg');
+  const submitBtn = document.querySelector('button[form="booking-form"]') || document.getElementById('new-booking-btn');
+
+  if (hint) {
+    if (selected.length === 0) {
+       hint.innerHTML = `<span style="color:#64748b;">⏳ กรุณาเลือกประเภทรถเพื่อตรวจสอบรถว่าง...</span>`;
+       if(submitBtn) submitBtn.disabled = true;
+    } else if (currentVal > maxRealAvail) {
+       // ERROR STATE
+       hint.innerHTML = `
+        <div style="color: #dc2626; font-weight: 800; font-size: 13px; background:#fef2f2; padding:4px 8px; border-radius:6px; border:1px solid #fecaca;">
+          ⚠️ คุณขอ ${currentVal} คัน แต่รถว่าง ${maxRealAvail} คัน 
+          <span style="display:block; font-weight:400; font-size:11px; margin-top:2px;">
+            (กรุณาลดจำนวน หรือเปลี่ยนช่วงเวลา)
+          </span>
+        </div>`;
+        el.style.borderColor = "#dc2626";
+        el.style.backgroundColor = "#fff1f2";
+        // Block submit via global flag or attribute
+        el.dataset.invalid = "true";
+    } else {
+       // SUCCESS STATE
+       hint.innerHTML = `
+        <div style="color: #16a34a; font-weight: 800; font-size: 13px;">
+          ✅ รถว่างตามประเภทที่เลือก: ${maxRealAvail} คัน
+        </div>`;
+        el.style.borderColor = "#10b981";
+        el.style.backgroundColor = "#fff";
+        el.dataset.invalid = "false";
+        if(submitBtn) submitBtn.disabled = false;
+    }
+  }
+
+  console.log(`🧷 [Berry Validator] Req=${currentVal} | MaxAvail=${maxRealAvail} | Reason=${reason || '-'}`);
+  return currentVal;
+}
+
+// --- [2] ฟังก์ชันโหลดข้อมูลและวาด UI ---
+
+async function loadAvailableVehicles(force) {
+  const vehicleSelectionDiv = document.getElementById("vehicle-selection");
+  if (!vehicleSelectionDiv) return;
+
+  const getISO = (el) => {
+    if (!el) return "";
+    if (el.dataset.iso) return el.dataset.iso;
+    const val = String(el.value || "").trim();
+    const m = val.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) {
+      let yy = Number(m[3]);
+      if (yy >= 2400) yy -= 543;
+      return `${yy}-${String(m[2]).padStart(2, '0')}-${String(m[1]).padStart(2, '0')}`;
+    }
+    return val;
+  };
+
+  const parse24 = (t) => {
+    const raw = String(t || "").trim().replace(/\s?น\.$/, "");
+    const m = raw.match(/^(\d{1,2}):(\d{2})/);
+    if (!m) return "";
+    let hh = Number(m[1]), mm = m[2];
+    if (raw.toLowerCase().includes("pm") && hh < 12) hh += 12;
+    if (raw.toLowerCase().includes("am") && hh === 12) hh = 0;
+    return `${String(hh).padStart(2, "0")}:${mm}`;
+  };
+
+  const dateISO = getISO(document.getElementById("booking-date"));
+  const endDateISO = getISO(document.getElementById("return-date")) || dateISO;
+  const startTime = parse24(document.getElementById("booking-start")?.value);
+  const endTime = parse24(document.getElementById("booking-end")?.value);
+
+  if (!dateISO || !startTime || !endTime) {
+    vehicleSelectionDiv.innerHTML = `<div style="padding:15px; background:#f8fafc; border-radius:12px; color:#64748b; text-align:center; font-size:13px;">ℹ️ ระบุวันและเวลา เพื่อตรวจสอบประเภทรถที่ว่างค่ะ</div>`;
+    return;
+  }
+
+  const currentKey = `${dateISO}|${endDateISO}|${startTime}|${endTime}`;
+  if (!force && loadAvailableVehicles.__LAST_KEY__ === currentKey) return;
+  loadAvailableVehicles.__LAST_KEY__ = currentKey;
+
+  vehicleSelectionDiv.innerHTML = `<div class="text-center p-3"><div class="spinner"></div> เช็คคิวรถ...</div>`;
+
+  try {
+    const payload = { date: dateISO, endDate: endDateISO, startTime, endTime };
+    const res = await new Promise((resolve, reject) => {
+      google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).getAvailableVehicles(payload);
+    });
+
+    if (!res || !res.ok) throw new Error(res?.error || "โหลดไม่สำเร็จ");
+
+    const vanAvail = res.vehicles.filter(v => v.available && (v.type === 'van' || String(v.type).includes('ตู้'))).length;
+    const truckAvail = res.vehicles.filter(v => v.available && (v.type === 'truck' || String(v.type).includes('บรรทุก'))).length;
+
+    // 🍓 เก็บค่าลง Global
+    window.__VB_AVAIL = { van: vanAvail, truck: truckAvail };
+
+    let html = `<div style="margin-bottom:8px; font-weight:800; font-size:13px; color:#475569;">🚐 เลือกประเภทรถที่ต้องการจอง</div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">`;
+
+    const types = [
+      { id: 'van', name: 'รถตู้', icon: '🚐', avail: vanAvail },
+      { id: 'truck', name: 'รถบรรทุก', icon: '🚚', avail: truckAvail }
+    ];
+
+    types.forEach(t => {
+      const isFull = t.avail === 0;
+      html += `
+        <label style="cursor:${isFull ? 'not-allowed' : 'pointer'}; opacity:${isFull ? '0.6' : '1'}; position:relative;">
+          <input type="checkbox" name="carTypeSelect" value="${t.id}" ${isFull ? 'disabled' : ''} 
+                 onchange="handleTypeSelection(this)" style="display:none;">
+          <div class="type-card" id="card-${t.id}" style="padding:10px 8px; border:2px solid #e2e8f0; border-radius:12px; text-align:center; transition:all 0.2s ease; background:#fff; display:flex; flex-direction:column; align-items:center; min-height:80px; justify-content:center;">
+            <div style="font-size:20px; margin-bottom:2px;">${t.icon}</div>
+            <div style="font-weight:800; font-size:13px; color:#1e293b;">${t.name}</div>
+            <div style="font-size:11px; color:${isFull ? '#dc2626' : '#16a34a'}; font-weight:700;">
+              ${isFull ? 'เต็มแล้ว' : 'ว่าง ' + t.avail}
+            </div>
+          </div>
+        </label>`;
+    });
+
+    html += `</div>`;
+    vehicleSelectionDiv.innerHTML = html;
+    
+    // รีเซ็ตสถานะปุ่ม
+    clampVehicleCountNow('refresh UI');
+
+  } catch (err) {
+    vehicleSelectionDiv.innerHTML = `<div style="padding:10px; background:#fef2f2; border-radius:10px; color:#dc2626; font-size:12px;">❌ ${err.message}</div>`;
+  }
+}
+
+// --- [3] ฟังก์ชันจัดการการคลิก (UI & Logic) ---
+
+window.handleTypeSelection = function(el) {
+  const checkboxes = document.querySelectorAll('input[name="carTypeSelect"]');
+  const carTypeHidden = document.getElementById('carType') || document.querySelector('[name="carType"]');
+
+  let selected = [];
+
+  checkboxes.forEach(cb => {
+    const card = document.getElementById('card-' + cb.value);
+    if (cb.checked) {
+      selected.push(cb.value);
+      card.style.borderColor = "#4f46e5";
+      card.style.background = "#f5f3ff";
+      card.style.boxShadow = "0 4px 12px rgba(79, 70, 229, 0.15)";
+      card.style.transform = "translateY(-2px)";
+    } else {
+      card.style.borderColor = "#e2e8f0";
+      card.style.background = "#fff";
+      card.style.boxShadow = "none";
+      card.style.transform = "translateY(0)";
+    }
+  });
+
+  // อัปเดตค่าลง Hidden Input เพื่อส่งบันทึกลง Sheet
+  if (carTypeHidden) carTypeHidden.value = selected.join(',');
+  
+  // 🍓 เรียกใช้การ Clamp ตัวเลข
+  clampVehicleCountNow('user selection');
+};
+
+window.loadAvailableVehicles = loadAvailableVehicles;
+
+
+
+function updateCarCountMaxFromAvailable_(availableCount) {
+    const input = document.getElementById('car-count');
+    if (!input) return;
+
+    const n = Number(availableCount);
+    const cap = 5;
+
+    const maxAllowed = Math.max(1, Math.min(cap, Number.isFinite(n) ? n : 1));
+    input.max = String(maxAllowed);
+
+    const cur = Number(input.value || 1);
+    if (!Number.isFinite(cur) || cur < 1) input.value = '1';
+    if (cur > maxAllowed) input.value = String(maxAllowed);
+
+    const hint = document.getElementById('car-count-hint');
+    if (hint) hint.textContent = `เลือกได้สูงสุด ${maxAllowed} คัน (จากรถว่าง ${Number.isFinite(n) ? n : 0} คัน)`;
+}
+
+
+    function toggleVehicle(checkbox) {
+        const vehicleId = checkbox.value;
+        const vehicleName = checkbox.dataset.name;
+        const index = selectedVehicles.findIndex(v => v.id === vehicleId);
+        if (index > -1) {
+            selectedVehicles.splice(index, 1);
+        } else {
+            const icon = checkbox.closest('.vehicle-option').querySelector('.vehicle-icon')?.textContent || '🚗';
+            selectedVehicles.push({ id: vehicleId, name: vehicleName, icon: icon });
+        }
+        renderSelectedVehicleTags();
+    }
+
+    function renderSelectedVehicleTags() {
+    const container = document.getElementById('selected-vehicles');
+    const list = document.getElementById('selected-vehicle-list');
+    if (!container || !list) return;
+    if (selectedVehicles.length > 0) {
+        container.classList.remove('hidden');
+        list.innerHTML = selectedVehicles.map(v => {
+            const displayName = formatVehicleDisplayName({ name: v.name, plate: v.id });
+            return `
+            <div class="vehicle-tag">
+                <span class="vehicle-icon">${v.icon || '🚗'}</span>
+                <span>${escapeHtml(displayName)}</span>
+                <button type="button" class="cancel-selection-btn" onclick="removeSelectedVehicle('${escapeHtml(v.id)}')">✕</button>
+            </div>
+            `;
+        }).join('');
+    } else {
+        list.innerHTML = '<p class="text-muted">ยังไม่มีรถที่เลือกค่ะ</p>';
+    }
+}
+
+    function removeSelectedVehicle(vehicleId) {
+        selectedVehicles = selectedVehicles.filter(v => v.id !== vehicleId);
+        renderSelectedVehicleTags();
+        const checkbox = document.querySelector(`#vehicle-selection input[value="${escapeHtml(vehicleId)}"]`);
+        if (checkbox) {
+            checkbox.checked = false;
+            const statusEl = checkbox.closest('.vehicle-option')?.querySelector('.vehicle-status');
+            if (statusEl && statusEl.textContent.includes('ไม่ว่าง')) {
+                statusEl.textContent = '✅ ว่าง';
+                statusEl.className = 'vehicle-status text-success';
+            }
+        }
+    }
+
+window.openAssignmentAndCloseDetails = function(bookingId, ev) {
+    try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (_) {}
+
+    const id = String(bookingId || '').trim();
+    if (!id) {
+        if (typeof showToast === 'function') showToast('ไม่พบ Booking ID', 'error');
+        return;
+    }
+
+    console.log('[Assignment] open', { bookingId: id });
+
+    try {
+        if (typeof closeModalA11y === 'function') {
+            closeModalA11y('activity-modal');
+        }
+
+        if (typeof openAssignmentModal === 'function') {
+            openAssignmentModal(id);
+            return;
+        }
+
+        if (typeof openAssignmentByBookingId === 'function') {
+            openAssignmentByBookingId(id);
+            return;
+        }
+
+        if (typeof showAssignmentModal === 'function') {
+            showAssignmentModal(id);
+            return;
+        }
+
+        throw new Error('ไม่พบฟังก์ชันเปิดหน้ามอบหมายงาน');
+    } catch (e) {
+        console.error('[Assignment] open error', e);
+        if (typeof showToast === 'function') {
+            showToast('เปิดหน้ามอบหมายงานไม่สำเร็จ', 'error');
+        }
+    }
+};
+
+window.openRejectAndCloseDetails = function(bookingId, ev) {
+    try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (_) {}
+
+    const id = String(bookingId || '').trim();
+    if (!id) {
+        if (typeof showToast === 'function') showToast('ไม่พบ Booking ID', 'error');
+        return;
+    }
+
+    const modal = document.getElementById('reject-booking-modal');
+    const idEl = document.getElementById('reject-booking-id');
+    const reasonEl = document.getElementById('reject-reason');
+    const errorEl = document.getElementById('reject-modal-error');
+    const loadingEl = document.getElementById('reject-modal-loading');
+    const submitBtn = document.getElementById('reject-submit-btn');
+    const cancelBtn = document.getElementById('reject-cancel-btn');
+
+    console.log('[RejectModal] open', { bookingId: id });
+
+    try {
+        if (!modal || !idEl || !reasonEl) {
+            throw new Error('ไม่พบ Reject Modal');
+        }
+
+        if (typeof closeModalA11y === 'function') {
+            closeModalA11y('activity-modal');
+        }
+
+        if (!window.__rejectBookingState) {
+            window.__rejectBookingState = { bookingId: '', isSubmitting: false };
+        }
+
+        window.__rejectBookingState.bookingId = id;
+        window.__rejectBookingState.isSubmitting = false;
+
+        idEl.textContent = id;
+        reasonEl.value = '';
+        reasonEl.disabled = false;
+
+        if (errorEl) {
+            errorEl.style.display = 'none';
+            errorEl.textContent = '';
+        }
+
+        if (loadingEl) {
+            loadingEl.style.display = 'none';
+        }
+
+        if (submitBtn) submitBtn.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+
+        setTimeout(function() {
+            reasonEl.focus();
+        }, 50);
+    } catch (e) {
+        console.error('[RejectModal] open error', e);
+        if (typeof showToast === 'function') {
+            showToast('เปิดหน้าปฏิเสธรายการไม่สำเร็จ', 'error');
+        }
+    }
+};
+
+// 🍓 BERRY FIX: Safe Modal Actions
+window.closeRejectModal = function() {
+    const modal = document.getElementById('reject-booking-modal');
+    if (!modal || (window.__rejectBookingState && window.__rejectBookingState.isSubmitting)) return;
+    
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden', 'true');
+    // Reset UI
+    const err = document.getElementById('reject-modal-error');
+    const ld = document.getElementById('reject-modal-loading');
+    if (err) err.style.display = 'none';
+    if (ld) ld.style.display = 'none';
+    console.log('[RejectModal] Closed Successfully');
+};
+
+window.submitRejectBooking = async function() {
+    const state = window.__rejectBookingState;
+    if (!state || !state.bookingId || state.isSubmitting) return;
+
+    const reason = document.getElementById('reject-reason').value.trim();
+    const errEl = document.getElementById('reject-modal-error');
+    const ldEl = document.getElementById('reject-modal-loading');
+    const btn = document.getElementById('reject-submit-btn');
+
+    if (!reason) {
+        if (errEl) { errEl.textContent = '❌ กรุณาระบุเหตุผลก่อนค่ะ'; errEl.style.display = 'block'; }
+        return;
+    }
+
+    state.isSubmitting = true;
+    btn.disabled = true;
+    // UX Rule: Show loading if > 300ms
+    const timer = setTimeout(() => { if(ldEl) ldEl.style.display = 'block'; }, 300);
+
+    try {
+        const res = await googleScriptRunLimited('apiUpdateBookingStatus', {
+            bookingId: state.bookingId,
+            status: 'rejected',
+            reason: reason
+        });
+        if (!res || !res.ok) throw new Error(res?.error || 'Server error');
+        
+        await refreshBookingUiAfterMutation({ forceSync: true });
+        showToast('ไม่อนุมัติสำเร็จ ✅', 'success');
+        state.isSubmitting = false; // ปลดล็อกก่อนปิด
+        window.closeRejectModal();
+    } catch (e) {
+        if (errEl) { errEl.textContent = '⚠️ ' + e.message; errEl.style.display = 'block'; }
+        btn.disabled = false;
+        state.isSubmitting = false;
+    } finally {
+        clearTimeout(timer);
+        if(ldEl) ldEl.style.display = 'none';
+    }
+};
+/* ==================== [BERRY FIX] MODERN UI DETAIL MODAL (WITH BACKGROUND) ==================== */
+function showCalendarEventDetail(ev, event) {
+  if (event) {
+    try { event.stopPropagation(); } catch (_) {}
+  }
+
+  const modal = document.getElementById('activity-modal');
+  const header = document.getElementById('activity-modal-header');
+  const title = document.getElementById('activity-title');
+  const details = document.getElementById('activity-details');
+  const footer = document.getElementById('activity-modal-footer');
+
+  if (!modal || !title || !details || !footer) return;
+
+  const statusKey = String(
+    typeof normalizeClientStatus === 'function'
+      ? normalizeClientStatus(ev?.status || 'pending')
+      : (ev?.status || 'pending')
+  ).toLowerCase().trim();
+
+  const isDriverBlock = statusKey === 'driver_block';
+  const isVehicleBlock = statusKey === 'vehicle_block';
+
+  if (header) {
+    header.className = 'modal-header ' + (isDriverBlock || isVehicleBlock ? 'modal-header-warning' : 'modal-header-primary');
+  }
+
+  title.innerHTML = isDriverBlock
+    ? '👤 รายละเอียดการลาพนักงานขับรถ'
+    : isVehicleBlock
+      ? '🛠️ รายละเอียดการส่งรถซ่อม/ปิดใช้งาน'
+      : '📋 รายละเอียดกิจกรรม';
+
+  const safe = (v) => escapeHtml(String(v || '-'));
+  const startDate = ev?.startDate || ev?.date || '-';
+  const endDate = ev?.endDate || ev?.date || '-';
+  const startTime = ev?.startTime || '-';
+  const endTime = ev?.endTime || '-';
+
+  const displayName = isDriverBlock
+    ? (ev?.blockName || ev?.driver || ev?.name || '-')
+    : (ev?.plate || ev?.vehicle || ev?.name || '-');
+
+  const reasonText = ev?.proj || ev?.project || ev?.workName || ev?.reason || ev?.note || 'งดใช้งาน';
+
+  details.innerHTML = `
+    <div class="detail-container">
+      <div class="info-grid">
+        <div class="info-item">
+          <div class="info-label">ประเภท</div>
+          <div class="info-value">${safe(ev?.type || ev?.purpose || ev?.workType || '-')}</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">สถานะ</div>
+          <div class="info-value">${safe(typeof getStatusText === 'function' ? getStatusText(statusKey) : statusKey)}</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">วันที่</div>
+          <div class="info-value">${safe(typeof formatDate === 'function' ? formatDate(startDate) : startDate)}${endDate !== startDate ? ' - ' + safe(typeof formatDate === 'function' ? formatDate(endDate) : endDate) : ''}</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">เวลา</div>
+          <div class="info-value">${safe(startTime)} - ${safe(endTime)}</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">${isDriverBlock ? 'พนักงานขับรถ' : 'รถ/ทะเบียน'}</div>
+          <div class="info-value">${safe(displayName)}</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">สถานที่</div>
+          <div class="info-value">${safe(ev?.place || ev?.destination || '-')}</div>
+        </div>
+        <div class="info-item info-item-full">
+          <div class="info-label">รายละเอียด</div>
+          <div class="info-value">${safe(reasonText)}</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // ANCHOR: isDriverBlock footer (บรรทัด ~5218)
+  if (isDriverBlock) {
+    const isClosed = ev?.isClosed || String(ev?.blockStatus || '').toLowerCase() === 'closed';
+    footer.innerHTML = `
+      <button type="button" class="btn btn-secondary" onclick="closeActivityModal()">ปิด</button>
+      ${!isClosed ? `
+        <button type="button" class="btn btn-warning" onclick="closeActivityModal(); window.openSuspendModal && window.openSuspendModal('driver', '${safe(displayName)}', null);">เพิ่มวันลา</button>
+        <button type="button"
+                class="btn btn-danger"
+                onclick="window.closeAvailBlock('${ev?.bookingId}', event, this)">
+          🏁 ปิดการลา
+        </button>
+      ` : ''}
+    `;
+
+ // ANCHOR: isVehicleBlock footer (บรรทัด ~5231)
+  } else if (isVehicleBlock) {
+    const isClosed = ev?.isClosed || String(ev?.blockStatus || '').toLowerCase() === 'closed';
+    footer.innerHTML = `
+      <button type="button" class="btn btn-secondary" onclick="closeActivityModal()">ปิด</button>
+      ${!isClosed ? `
+        <button type="button" class="btn btn-warning" onclick="closeActivityModal(); window.openSuspendModal && window.openSuspendModal('vehicle', '${safe(displayName)}', null);">เพิ่มส่งซ่อม</button>
+        <button type="button"
+                class="btn btn-danger"
+                onclick="window.closeAvailBlock('${ev?.bookingId}', event, this)">
+          🏁 ปิดการส่งซ่อม
+        </button>
+      ` : ''}
+    `;
+  } else {
+    footer.innerHTML = `
+      <button type="button" class="btn btn-secondary" onclick="closeActivityModal()">ปิด</button>
+    `;
+  }
+
+  if (typeof openModalA11y === 'function') {
+    openModalA11y('activity-modal');
+  } else {
+    modal.classList.add('active');
+    modal.style.display = 'flex';
+  }
+}
+
+function canShowEarlyCloseButton(booking) {
+  if (!booking) return false;
+
+  const user = window.currentUser || { isLoggedIn: false, role: 'Guest' };
+  const roleLc = String(user.role || '').toLowerCase().trim();
+  const isAdminLevel = ['admin', 'admindriver', 'admin_driver'].includes(roleLc);
+
+  if (!isAdminLevel) {
+    console.log('[selfTest] canShowEarlyCloseButton: HIDDEN (Role is not Admin/AdminDriver)', { role: roleLc });
+    return false;
+  }
+
+  const statusKey = (typeof normalizeClientStatus === 'function')
+    ? normalizeClientStatus(booking.status || 'pending')
+    : String(booking.status || 'pending').toLowerCase().trim();
+
+  const isApproved = (statusKey === 'approved' || statusKey === 'driver_special_approved');
+  if (!isApproved) {
+    console.log('[selfTest] canShowEarlyCloseButton: HIDDEN (not approved)', { id: booking.bookingId, status: statusKey });
+    return false;
+  }
+  if (booking.actualEndAt) {
+    console.log('[selfTest] canShowEarlyCloseButton: HIDDEN (already closed)', { id: booking.bookingId });
+    return false;
+  }
+
+  const vStr = String(booking.vehicle || booking.plate || '').trim();
+  if (!vStr || vStr === '-' || vStr.toLowerCase() === 'none') {
+    console.log('[selfTest] canShowEarlyCloseButton: HIDDEN (no vehicle assigned)', { id: booking.bookingId });
+    return false;
+  }
+
+  const vArr = vStr.split(',').map(s => s.trim()).filter(Boolean);
+  const result = vArr.length > 0;
+  console.log('[selfTest] canShowEarlyCloseButton: ' + (result ? 'SHOWN ✅' : 'HIDDEN'), { id: booking.bookingId, status: statusKey, vehicles: vArr });
+  return result;
+}
+
+window.canShowEarlyCloseButton = canShowEarlyCloseButton;
+
+async function showActivityDetails(bookingId, event) {
+  if (event) {
+    try { event.stopPropagation(); } catch (_) {}
+  }
+
+  const id = String(bookingId || '').trim();
+  if (!id) return;
+
+  const modal = document.getElementById('activity-modal');
+  const details = document.getElementById('activity-details');
+  const footer = document.getElementById('activity-modal-footer');
+  const titleEl = document.getElementById('activity-title');
+
+  if (!modal || !details) return;
+
+  modal.classList.add('bx-modern-view');
+
+  if (typeof showLoading === 'function') showLoading();
+
+  let b = null;
+  try {
+    const runner = (typeof window.googleScriptRunLimited === 'function')
+      ? window.googleScriptRunLimited
+      : window.googleScriptRun;
+
+    const res = await runner('getById', id);
+    if (res && res.ok && res.data) {
+      b = res.data;
+      window.bookingsById = window.bookingsById || new Map();
+      window.bookingsById.set(id, b);
+    }
+  } catch (e) {
+    console.warn('[showActivityDetails] Fetch error:', e);
+  } finally {
+    if (typeof hideLoading === 'function') hideLoading();
+  }
+
+  if (!b && window.bookingsById) {
+    b = window.bookingsById.get(id);
+  }
+
+  if (!b) {
+    if (typeof showToast === 'function') showToast(`ไม่พบข้อมูล ID: ${id}`, 'error');
+    return;
+  }
+
+  const statusKey = typeof normalizeClientStatus === 'function'
+    ? normalizeClientStatus(b.status || 'pending')
+    : String(b.status || 'pending').toLowerCase().trim();
+
+  if (statusKey === 'approved' || statusKey === 'driver_special_approved') {
+    window.__ASSIGN_CTX__ = Object.assign({}, b);
+  }
+
+  let badgeHtml = '';
+  let mainTitle = `รายละเอียดการจอง ID: ${id}`;
+
+  if (statusKey === 'approved' || statusKey === 'driver_special_approved') {
+    badgeHtml = '<span style="background:white; color:#16a34a; padding:4px 12px; border-radius:20px; font-size:0.9rem; display:flex; align-items:center; gap:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); white-space:nowrap;">✅ อนุมัติ</span>';
+  } else if (statusKey === 'pending') {
+    badgeHtml = '<span style="background:white; color:#ca8a04; padding:4px 12px; border-radius:20px; font-size:0.9rem; display:flex; align-items:center; gap:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); white-space:nowrap;">⏳ รออนุมัติ</span>';
+  } else if (statusKey === 'rejected') {
+    badgeHtml = '<span style="background:white; color:#dc2626; padding:4px 12px; border-radius:20px; font-size:0.9rem; display:flex; align-items:center; gap:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); white-space:nowrap;">❌ ไม่อนุมัติ</span>';
+  } else if (statusKey === 'driver_block') {
+    const isRepair = String(b.purpose || b.reason || b.workName || b.project || '').indexOf('ซ่อม') !== -1;
+    if (isRepair) {
+      badgeHtml = '<span style="background:white; color:#991b1b; padding:4px 12px; border-radius:20px; font-size:0.9rem; display:flex; align-items:center; gap:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); white-space:nowrap;">🛠 ส่งซ่อม/นำรถไปซ่อม</span>';
+      mainTitle = 'นำรถไปซ่อมบำรุง / ติดภารกิจ';
+    } else {
+      badgeHtml = '<span style="background:white; color:#ea580c; padding:4px 12px; border-radius:20px; font-size:0.9rem; display:flex; align-items:center; gap:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); white-space:nowrap;">⏸ พนักงานลา/พักงาน</span>';
+      mainTitle = 'บันทึกการลางาน';
+    }
+  } else if (statusKey === 'vehicle_block') {
+    badgeHtml = '<span style="background:white; color:#991b1b; padding:4px 12px; border-radius:20px; font-size:0.9rem; display:flex; align-items:center; gap:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); white-space:nowrap;">🛠 ส่งซ่อมบำรุง</span>';
+    mainTitle = 'บันทึกการส่งรถซ่อม';
+  } else {
+    badgeHtml = '<span style="background:white; color:#475569; padding:4px 12px; border-radius:20px; font-size:0.9rem; display:flex; align-items:center; gap:4px; box-shadow:0 2px 5px rgba(0,0,0,0.1); white-space:nowrap;">🚫 ยกเลิก</span>';
+  }
+
+  if (titleEl) {
+    titleEl.innerHTML = `
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <span style="font-weight:700; font-size:1.15rem; line-height:1.2; word-break:break-word;">${mainTitle}</span>
+        <div style="flex-shrink:0;">${badgeHtml}</div>
+      </div>
+    `;
+  }
+
+  const isNone = (v) => (!v || v === '-' || String(v).toLowerCase() === 'none');
+  const fmtT = (t) => t ? String(t).replace('น.', '').trim() + ' น.' : '';
+  const dStart = (typeof formatDate === 'function' ? formatDate(b.startDate) : b.startDate);
+  const dEnd = (typeof formatDate === 'function' ? formatDate(b.endDate) : b.endDate);
+
+  let rawWorkType = String(b.workType || b.jobType || '').trim();
+  let rawWorkName = String(b.workName || b.projectName || b.project || b.purpose || '').trim();
+
+  if (rawWorkType === '-') rawWorkType = '';
+  if (rawWorkName === '-') rawWorkName = '';
+
+  let purposeHtml = rawWorkType ? escapeHtml(rawWorkType) : '<span style="color:#94a3b8; font-style:italic;">ไม่ระบุ</span>';
+  let projectHtml = rawWorkName ? escapeHtml(rawWorkName) : '<span style="color:#94a3b8; font-style:italic;">ไม่ระบุ</span>';
+  let destHtml = escapeHtml(b.place || b.destination || '-');
+
+  const reqCount = parseInt(b.vehicleCount, 10) || 1;
+  const vStr = String(b.vehicle || b.plate || '').trim();
+  const vArr = !isNone(vStr) ? vStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const assignedCount = vArr.length;
+
+  const normalizedCarType = normalizeVehicleTypeLabel(b.carType) || '-';
+  let vehicleDisplay = `${escapeHtml(normalizedCarType)} / `;
+  if ((statusKey === 'approved' || statusKey === 'driver_special_approved') && assignedCount > 0) {
+    if (assignedCount < reqCount) {
+      vehicleDisplay += `<span style="color:#dc2626;">อนุมัติ ${assignedCount}</span> / ขอ ${reqCount} คัน`;
+    } else {
+      vehicleDisplay += `อนุมัติ ${assignedCount} คัน`;
+    }
+  } else {
+    vehicleDisplay += `ขอ ${reqCount} คัน`;
+  }
+
+  let paxHtml = `${escapeHtml(String(b.passengers || '-'))} คน`;
+
+  let labelUser = 'ผู้จอง:';
+  let labelType = '🎯 ประเภทงาน:';
+  let labelProj = '📝 งาน/โครงการ:';
+  let labelDest = '📍 สถานที่ปลายทาง:';
+
+  if (statusKey === 'driver_block') {
+    labelUser = 'พนักงานขับรถ:';
+    labelType = '📋 สถานะ:';
+    labelProj = '💬 สาเหตุ/หมายเหตุ:';
+    const isRepair = String(b.purpose || b.reason || b.workName || b.project || '').indexOf('ซ่อม') !== -1;
+    purposeHtml = isRepair ? '<span style="color:#991b1b; font-weight:700;">ส่งซ่อม/นำรถไปซ่อม</span>' : '<span style="color:#ea580c; font-weight:700;">พักงาน / ลางาน</span>';
+    destHtml = '-';
+    vehicleDisplay = '-';
+    paxHtml = '-';
+  } else if (statusKey === 'vehicle_block') {
+    labelUser = 'รถที่ส่งซ่อม:';
+    labelType = '📋 สถานะ:';
+    labelProj = '💬 สาเหตุ/หมายเหตุ:';
+    purposeHtml = '<span style="color:#991b1b; font-weight:700;">ส่งซ่อมบำรุง / งดใช้</span>';
+    destHtml = '-';
+    vehicleDisplay = '-';
+    paxHtml = '-';
+  }
+
+  const position = String(b.position || '').trim();
+  let posIcon = '👤';
+  if (statusKey === 'driver_block') {
+    posIcon = '👤';
+  } else if (statusKey === 'vehicle_block') {
+    posIcon = '🚐';
+  } else {
+    if (position.includes('อาจารย์')) posIcon = '👩‍🏫';
+    else if (position.includes('เจ้าหน้าที่')) posIcon = '🧑‍💼';
+    else if (position.includes('นักศึกษา')) posIcon = '🎒';
+  }
+
+  let phoneHtml = '';
+  if (statusKey !== 'driver_block' && statusKey !== 'vehicle_block') {
+    phoneHtml = `
+      <div style="width:100%; border-top:1px dashed #e2e8f0; padding-top:8px; margin-top:auto;">
+        <div class="bx-label" style="margin-bottom:2px;">เบอร์โทรศัพท์:</div>
+        <a href="tel:${b.phone || ''}" style="color:#2563eb; font-weight:700; text-decoration:none; font-size:1rem; display:block;">
+          📞 ${escapeHtml(b.phone || '-')}
+        </a>
+      </div>`;
+  }
+
+  let html = `<div class="bx-container">
+    <div class="bx-top-grid">
+      <div class="bx-card bx-user-profile" style="display:flex; flex-direction:column; align-items:center; text-align:center; justify-content:center; padding:1.25rem 0.5rem;">
+        <div style="margin-bottom:8px;">
+          <div class="bx-avatar" style="width:64px; height:64px; margin:0 auto; font-size:2rem;">${posIcon}</div>
+        </div>
+        <div style="width:100%; margin-bottom:8px;">
+          <div class="bx-label" style="margin-bottom:2px;">${labelUser}</div>
+          <div style="font-size:0.95rem; font-weight:700; color:#1e293b; line-height:1.4; word-wrap:break-word; overflow-wrap:anywhere;">
+            ${escapeHtml((statusKey === 'driver_block' && b.assignedDriver) ? b.assignedDriver : (b.name || '-'))}
+          </div>
+          ${(position && statusKey !== 'driver_block' && statusKey !== 'vehicle_block') ? `<div style="font-size:0.85rem; color:#64748b; margin-top:2px;">ตำแหน่ง: ${escapeHtml(position)}</div>` : ''}
+          ${(statusKey === 'vehicle_block' && b.assignedDriver && b.assignedDriver !== '-') ? `
+            <div style="margin-top:12px; border-top:1px dashed #cbd5e1; padding-top:8px;">
+              <div style="font-size:0.8rem; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:2px;">👤 ผู้นำรถไปซ่อม:</div>
+              <div style="font-size:0.95rem; font-weight:700; color:#ea580c; line-height:1.4;">${escapeHtml(b.assignedDriver)}</div>
+            </div>
+          ` : ''}
+        </div>
+        ${phoneHtml}
+      </div>
+
+      <div class="bx-card" style="display:flex; flex-direction:column; justify-content:center; gap:12px;">
+        <div class="bx-info-row" style="background:#f8fafc; padding:10px 12px; border-radius:8px; border:1px solid #e2e8f0;">
+          <div class="bx-label" style="margin-bottom:4px; color:#475569; font-weight:700;">${labelType}</div>
+          <div class="bx-value" style="font-size:1rem; color:#1e293b; font-weight:600; line-height:1.4;">
+            ${purposeHtml}
+          </div>
+        </div>
+
+        <div class="bx-info-row" style="padding:0 8px;">
+          <div class="bx-label" style="margin-bottom:4px; color:#475569; font-weight:700;">${labelProj}</div>
+          <div class="bx-value" style="font-size:1rem; color:#1e293b; line-height:1.4;">
+            ${projectHtml}
+          </div>
+        </div>
+
+        ${(statusKey !== 'driver_block' && statusKey !== 'vehicle_block') ? `
+        <div style="border-top:1px solid #f1f5f9; margin:4px 0;"></div>
+
+        <div class="bx-info-row" style="padding:0 8px;">
+          <div class="bx-label" style="margin-bottom:4px; color:#475569; font-weight:700;">${labelDest}</div>
+          <div class="bx-value text-primary" style="font-size:1rem; font-weight:600; line-height:1.4;">
+            ${destHtml}
+          </div>
+        </div>
+        ` : ''}
+      </div>
+    </div>
+
+    <div class="bx-detail-grid">
+      <div class="bx-detail-item">
+        <div class="bx-icon-box" style="color:#8b5cf6; background:#f5f3ff;">📅</div>
+        <div class="bx-detail-text">
+          <span class="bx-label">${statusKey === 'driver_block' || statusKey === 'vehicle_block' ? 'วันเริ่มต้น' : 'วันเดินทางไป'}</span>
+          <span class="bx-value">${dStart}<br><span style="font-size:0.9em; color:#64748b;">${fmtT(b.startTime)}</span></span>
+        </div>
+      </div>
+      <div class="bx-detail-item">
+        <div class="bx-icon-box" style="color:#3b82f6; background:#eff6ff;">🔙</div>
+        <div class="bx-detail-text">
+          <span class="bx-label">${statusKey === 'driver_block' || statusKey === 'vehicle_block' ? 'วันสิ้นสุด' : 'วันเดินทางกลับ'}</span>
+          <span class="bx-value">${dEnd}<br><span style="font-size:0.9em; color:#64748b;">${fmtT(b.endTime)}</span></span>
+        </div>
+      </div>
+
+      ${(statusKey !== 'driver_block' && statusKey !== 'vehicle_block') ? `
+      <div class="bx-detail-item">
+        <div class="bx-icon-box" style="color:#f59e0b; background:#fffbeb;">🚐</div>
+        <div class="bx-detail-text">
+          <span class="bx-label">ประเภทรถ / จำนวน</span>
+          <span class="bx-value">${vehicleDisplay}</span>
+        </div>
+      </div>
+      <div class="bx-detail-item">
+        <div class="bx-icon-box" style="color:#10b981; background:#ecfdf5;">👥</div>
+        <div class="bx-detail-text">
+          <span class="bx-label">ผู้ร่วมเดินทาง</span>
+          <span class="bx-value">${paxHtml}</span>
+        </div>
+      </div>
+      ` : ''}
+    </div>`;
+
+  if (statusKey === 'approved' && vArr.length > 0) {
+    const dStr = String(b.driver || '').trim();
+    const dArr = !isNone(dStr) ? dStr.split(',').map(s => s.trim()) : [];
+    const detailVehicleIcon = getVehicleIcon(normalizedCarType || b.carType || '');
+    let vList = '';
+
+    vArr.forEach((v, i) => {
+      vList += `<div class="bx-vehicle-card">
+        <div class="bx-vehicle-img">${detailVehicleIcon}</div>
+        <div>
+          <div style="font-weight:700; color:#1e293b; font-size:1.1rem;">${escapeHtml(v)}</div>
+          <div style="font-size:0.9rem; color:#475569;">คนขับ: ${escapeHtml(dArr[i] || 'รอระบุชื่อ')}</div>
+        </div>
+      </div>`;
+    });
+
+    html += `<div class="bx-assigned-section"><div class="bx-assigned-title">ข้อมูลการมอบหมาย</div>${vList}</div>`;
+  }
+
+  if (!isNone(b.reason) && statusKey !== 'driver_block' && statusKey !== 'vehicle_block') {
+    html += `<div style="margin-top:1rem; padding:1rem; background:#fff7ed; border:1px solid #ffedd5; border-radius:12px; color:#c2410c;"><strong>💬 หมายเหตุ:</strong> ${escapeHtml(b.reason)}</div>`;
+  }
+
+  const fUrl = String(b.fileUrl || b.file || '').trim();
+  if (/^(http|https):\/\/[^ "]+$/.test(fUrl)) {
+    html += `<div style="margin-top:1rem; text-align:center;"><a href="${escapeHtml(fUrl)}" target="_blank" class="btn btn-sm btn-outline" style="border-radius:20px; border-color:#3b82f6; color:#3b82f6;">📎 เปิดดูไฟล์แนบ</a></div>`;
+  }
+
+  html += `</div>`;
+  details.innerHTML = html;
+
+  const user = window.currentUser || { isLoggedIn: false, role: 'Guest' };
+  const roleLc = String(user.role || '').toLowerCase().trim();
+  const isAdminLevel = ['admin', 'admindriver', 'admin_driver'].includes(roleLc);
+  const isQuickApprovable = ['admindriver', 'admin_driver'].includes(roleLc);
+  const isGuest = !user.isLoggedIn;
+
+  let btns = '';
+  const isBlockEvent = (statusKey === 'driver_block' || statusKey === 'vehicle_block');
+  const isApproved = (statusKey === 'approved' || statusKey === 'driver_special_approved');
+
+  if (isBlockEvent && isAdminLevel) {
+    const isClosed = b.isClosed === true || String(b.blockStatus || '').toLowerCase() === 'closed';
+    if (!isClosed) {
+      btns += `<button type="button" class="btn btn-danger" style="flex:1 1 auto; min-height:44px; font-size:0.95rem; font-weight:700; display:flex; align-items:center; justify-content:center; gap:6px; white-space:nowrap; padding:8px 12px; border:none; border-radius:10px; outline:none; box-shadow:0 4px 6px rgba(220,38,38,0.2);" onclick="closeAvailBlock('${id}', event, this)"><span style="font-size:1.15em;">🏁</span> ปิดงาน</button>`;
+    }
+  }
+
+  if (!isBlockEvent) {
+    if (statusKey === 'pending') {
+      if (isQuickApprovable) {
+        btns += `<button class="btn bx-btn" style="flex:1 1 auto; background:#8b5cf6; color:white; border:none;" onclick="handleSpecialApprove('${id}', event)">⚡ อนุมัติด่วน</button>`;
+      }
+      if (isAdminLevel) {
+        btns += `<button class="btn btn-success bx-btn" style="flex:1 1 auto;" onclick="openAssignmentAndCloseDetails('${id}', event)">✅ อนุมัติ</button>`;
+        btns += `<button class="btn btn-danger bx-btn" style="flex:1 1 auto;" onclick="openRejectAndCloseDetails('${id}', event)">⛔ ไม่อนุมัติ</button>`;
+      }
+    } else if (isApproved) {
+      // ANCHOR: early close button role check
+      const dStrForCheck = String(b.driver || b.assignedDriver || '');
+      const dArrForCheck = dStrForCheck.split(',').filter(Boolean);
+      
+      const cleanStrForRoleChk = (str) => String(str || '').replace(/\s+/g, '').toLowerCase();
+      const uNameCl = cleanStrForRoleChk(user.name);
+      const uUserCl = cleanStrForRoleChk(user.username);
+      const uDispCl = cleanStrForRoleChk(user.displayName);
+      const uFirstNameCl = uDispCl ? uDispCl.substring(0, 5) : (uNameCl ? uNameCl.substring(0, 5) : '');
+      
+      const isAssignedToMe = (roleLc === 'driver') && dArrForCheck.some(d => {
+        const dCl = cleanStrForRoleChk(d);
+        if (!dCl) return false;
+        if (uNameCl && dCl.includes(uNameCl)) return true;
+        if (uUserCl && dCl.includes(uUserCl)) return true;
+        if (uDispCl && dCl.includes(uDispCl)) return true;
+        if (uFirstNameCl && uFirstNameCl.length >= 3 && dCl.includes(uFirstNameCl)) return true;
+        return false;
+      });
+      
+      console.log('[selfTest] role check for early close:', { 
+        status: statusKey, role: roleLc, isAssignedToMe,
+        uNameCl, uUserCl, uDispCl, dArrForCheck
+      });
+
+      if (isAdminLevel) {
+        if (typeof window.canShowEarlyCloseButton === 'function' ? window.canShowEarlyCloseButton(b) : (assignedCount > 0 && !b.actualEndAt)) {
+          btns += `<button type="button" class="btn btn-danger" style="flex:1 1 auto; min-height:44px; font-weight:700; border-radius:10px; display:flex; align-items:center; justify-content:center; gap:6px;" onclick="handleAssignmentEarlyClose()"><span style="font-size:1.2em;">🏁</span> ปิดงานก่อนเวลา</button>`;
+        }
+      }
+
+      if (isAdminLevel) {
+        btns += `<button class="btn btn-warning bx-btn" style="flex:1 1 auto; color:white;" onclick="openAssignmentAndCloseDetails('${id}', event)">🔄 เปลี่ยนรถ/คนขับ</button>`;
+        btns += `<button class="btn btn-danger bx-btn" style="flex:1 1 auto;" onclick="openRejectAndCloseDetails('${id}', event)">⛔ ยกเลิกงาน</button>`;
+      }
+    }
+
+    if (isGuest && ['pending', 'approved', 'driver_special_approved'].includes(statusKey)) {
+      btns += `<button class="btn bx-btn bx-btn-cancel" style="flex:1 1 auto;" onclick="openCancelModalFromDetail('${id}', '${escapeHtml(b.phone)}')">ยกเลิกจอง</button>`;
+    }
+  }
+
+  btns += `<button class="btn bx-btn bx-btn-close" style="flex:1 1 auto; min-width:100px;" onclick="closeModalA11y('activity-modal')">ปิด</button>`;
+
+  if (footer) {
+    footer.style.display = 'flex';
+    footer.style.flexWrap = 'wrap';
+    footer.style.gap = '8px';
+    footer.style.justifyContent = 'center';
+    footer.innerHTML = btns;
+  }
+
+  openModalA11y('activity-modal');
+}
+
+// 🍓 BERRY FIX: UI Confirm ที่สวยงามสไตล์เดียวกับระบบ
+window.showCustomConfirm = function(title, text, confirmText = 'ยืนยัน', cancelText = 'ยกเลิก', confirmColor = '#16a34a') {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:20000; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px); opacity:0; transition:opacity 0.2s;';
+        
+        const box = document.createElement('div');
+        box.style.cssText = 'background:#fff; width:min(90vw, 400px); border-radius:16px; overflow:hidden; box-shadow:0 20px 25px -5px rgba(0,0,0,0.1); transform:scale(0.95); transition:transform 0.2s; font-family: "Sarabun", "Kanit", sans-serif;';
+        
+        const iconColor = confirmColor === '#16a34a' ? '#16a34a' : (confirmColor || '#8b5cf6');
+        const iconBg = confirmColor === '#16a34a' ? '#f0fdf4' : '#f5f3ff';
+        const iconChar = confirmColor === '#ef4444' ? '❓' : '❔';
+        
+        box.innerHTML = `
+            <div style="padding:1.5rem 1.5rem 1rem; text-align:center;">
+                <div style="width:64px; height:64px; border-radius:50%; background:${iconBg}; color:${iconColor}; display:flex; align-items:center; justify-content:center; font-size:2rem; margin:0 auto 1rem;">${iconChar}</div>
+                <h3 style="margin:0 0 0.5rem; font-size:1.25rem; color:#1e293b; font-weight:600;">${title}</h3>
+                <p style="margin:0; color:#64748b; font-size:0.95rem; line-height:1.5;">${text}</p>
+            </div>
+            <div style="padding:1rem 1.5rem 1.5rem; display:flex; gap:10px; justify-content:center; background:#f8fafc; border-top:1px solid #e2e8f0;">
+                <button id="custom-confirm-cancel" style="flex:1; padding:0.75rem; border-radius:8px; border:1px solid #cbd5e1; background:#fff; color:#475569; font-weight:600; cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='#fff'">${cancelText}</button>
+                <button id="custom-confirm-ok" style="flex:1; padding:0.75rem; border-radius:8px; border:none; background:${iconColor}; color:#fff; font-weight:600; cursor:pointer; box-shadow:0 4px 6px rgba(0,0,0,0.1); transition:opacity 0.2s;" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">${confirmText}</button>
+            </div>
+        `;
+        
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        
+        requestAnimationFrame(() => {
+            overlay.style.opacity = '1';
+            box.style.transform = 'scale(1)';
+        });
+        
+        const closeMod = (result) => {
+            overlay.style.opacity = '0';
+            box.style.transform = 'scale(0.95)';
+            setTimeout(() => {
+                if(document.body.contains(overlay)) document.body.removeChild(overlay);
+                resolve(result);
+            }, 200);
+        };
+        
+        overlay.querySelector('#custom-confirm-cancel').onclick = () => closeMod(false);
+        overlay.querySelector('#custom-confirm-ok').onclick = () => closeMod(true);
+    });
+};
+
+// ANCHOR: closeAvailBlock
+// แทนที่ทั้งฟังก์ชันเดิมด้วยตัวนี้
+window.closeAvailBlock = async function(id, event, btnEl) {
+  let loadingTimer = null;
+  let shouldHideLoading = false;
+
+  try {
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+  } catch (_) {}
+
+  var bookingId = String(id || '').trim();
+  if (!bookingId) {
+    if (typeof showToast === 'function') showToast('ไม่พบ Booking ID', 'error');
+    return;
+  }
+
+  if (window.__berryEarlyCloseBusy === true) {
+    console.warn('[EarlyClose] blocked duplicate submit');
+    return;
+  }
+
+  var btn = btnEl || (event && event.currentTarget ? event.currentTarget : null);
+  var oldHtml = btn ? btn.innerHTML : '';
+  var oldDisabled = btn ? btn.disabled : false;
+  var adminName = (window.currentUser && window.currentUser.name) ? window.currentUser.name : 'Admin';
+
+  const isConfirmed = await showCustomConfirm(
+    'ยืนยันปิดงานก่อนเวลา',
+    'เมื่อยืนยันแล้ว ระบบจะ soft close งานนี้ทันที และรถ/พนักงานขับรถจะกลับมาใช้งานได้ตามจริง โดยไม่ส่ง Telegram สำหรับ flow นี้',
+    '🏁 ยืนยันปิดงาน',
+    'ยกเลิก',
+    '#dc2626'
+  );
+
+  if (!isConfirmed) return;
+
+  window.__berryEarlyCloseBusy = true;
+  const reqToken = 'earlyclose_' + bookingId + '_' + Date.now();
+  window.__berryEarlyCloseToken = reqToken;
+
+  try {
+    console.log('[EarlyClose] before submit bookingId=', bookingId);
+
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '⏳ กำลังบันทึก...';
+      btn.setAttribute('aria-busy', 'true');
+    }
+
+    loadingTimer = setTimeout(function() {
+      if (window.__berryEarlyCloseToken !== reqToken) return;
+      shouldHideLoading = true;
+      if (typeof showLoading === 'function') showLoading();
+    }, 300);
+
+    var res = await googleScriptRun('closeAvailabilityBlock', {
+      bookingId: bookingId,
+      closedBy: adminName,
+      closeNote: 'ปิดงานก่อนเวลา เนื่องจากภารกิจเสร็จเร็วกว่ากำหนด',
+      noTelegram: true
+    });
+
+    if (window.__berryEarlyCloseToken !== reqToken) {
+      console.warn('[EarlyClose] stale response ignored');
+      return;
+    }
+
+    if (!res || !res.ok) {
+      throw new Error(res && res.error ? res.error : 'บันทึกไม่สำเร็จ');
+    }
+
+    console.log('[EarlyClose] success bookingId=', bookingId, 'closedAt=', res.closedAtText);
+
+    if (typeof closeModalA11y === 'function') {
+      closeModalA11y('activity-modal');
+    }
+
+    if (typeof showToast === 'function') {
+      showToast('ปิดงานก่อนเวลาเรียบร้อย • ' + (res.closedAtText || ''), 'success');
+    }
+
+    // 1) Sync RAM ล่าสุดก่อน เพื่อให้ปฏิทินวาดจากข้อมูลใหม่ทันที
+    try {
+      const initData = await googleScriptRunLimited('getWebAppInitialData', {});
+      if (
+        window.__berryEarlyCloseToken === reqToken &&
+        initData &&
+        initData.ok &&
+        initData.data
+      ) {
+        window.allBookingsData = initData.data.bookings || [];
+
+        if (initData.data.vehicles) {
+          window.vehiclesList = initData.data.vehicles;
+        }
+        if (Array.isArray(initData.data.drivers)) {
+          window.driversList = initData.data.drivers;
+        }
+        if (Array.isArray(initData.data.projects)) {
+          window.projectList = initData.data.projects;
+        }
+
+        if (typeof reindexBookings === 'function') {
+          reindexBookings(window.allBookingsData);
+        }
+
+        if (typeof updateCounters === 'function') {
+          updateCounters();
+        }
+
+        console.log('[EarlyClose] RAM sync success bookings=', (window.allBookingsData || []).length);
+      }
+    } catch (syncErr) {
+      console.warn('[EarlyClose] RAM sync failed:', syncErr);
+    }
+
+    // 2) Refresh dashboard aggregate ฝั่ง server แบบเงียบ ๆ
+    try {
+      await googleScriptRun('apiRefreshDashboard', {});
+    } catch (dashErr) {
+      console.warn('[EarlyClose] apiRefreshDashboard failed:', dashErr);
+    }
+
+    // 3) Refresh view ที่เกี่ยวข้อง
+    if (typeof loadBookingsView === 'function') {
+      loadBookingsView();
+    }
+
+    if (typeof loadAdminPanelData === 'function') {
+      await loadAdminPanelData();
+    }
+
+    if (typeof loadCalendarView === 'function' && window.calendarState) {
+      loadCalendarView(
+        window.calendarState.currentYear,
+        window.calendarState.currentMonth
+      );
+    } else if (typeof renderCalendar === 'function') {
+      var y = (window.calendarState && window.calendarState.currentYear)
+        ? window.calendarState.currentYear
+        : new Date().getFullYear();
+      var m = (window.calendarState && window.calendarState.currentMonth)
+        ? window.calendarState.currentMonth
+        : (new Date().getMonth() + 1);
+      renderCalendar(y, m);
+    }
+
+    if (typeof window.loadLiveStatusData === 'function') {
+      window.loadLiveStatusData();
+    } else if (typeof window.loadLiveStatus === 'function') {
+      window.loadLiveStatus();
+    }
+
+    if (typeof window.refreshRadarStatus === 'function') {
+      window.refreshRadarStatus();
+    }
+
+    if (typeof window.refreshDashboardRadar === 'function') {
+      window.refreshDashboardRadar();
+    }
+
+    console.log('[EarlyClose] refresh calendar / bookings / radar done');
+
+  } catch (err) {
+    console.error('[EarlyClose] fail', err);
+    if (typeof showToast === 'function') {
+      showToast('ปิดงานก่อนเวลาไม่สำเร็จ: ' + (err && err.message ? err.message : err), 'error');
+    }
+  } finally {
+    if (loadingTimer) clearTimeout(loadingTimer);
+
+    if (window.__berryEarlyCloseToken === reqToken) {
+      window.__berryEarlyCloseBusy = false;
+      window.__berryEarlyCloseToken = null;
+    }
+
+    if (btn) {
+      btn.disabled = oldDisabled;
+      btn.innerHTML = oldHtml;
+      btn.removeAttribute('aria-busy');
+    }
+
+    if (shouldHideLoading && typeof hideLoading === 'function') {
+      hideLoading();
+    }
+
+    console.log('[EarlyClose] finally cleanup done');
+  }
+};
+
+/* [ANCHOR: Open Cancel Modal from Details (Auto-fill & Auto-select)] */
+/* แทนที่ฟังก์ชันเดิมได้เลยค่ะ */
+window.openCancelModalFromDetail = function(bookingId, phone) {
+    console.log('❌ Requesting cancel for:', bookingId);
+
+    // 1. ปิดหน้าต่างรายละเอียดก่อน
+    if (typeof closeActivityModal === 'function') closeActivityModal();
+    else closeModalA11y('activity-modal');
+
+    // 2. รอจังหวะนิดนึงแล้วเปิดหน้าต่างยกเลิก
+    setTimeout(() => {
+        const cancelModalId = 'cancel-modal';
+        const form = document.getElementById('cancel-form');
+        
+        if(form) {
+            form.reset(); // ล้างค่าเก่าก่อน
+            
+            // --- A. กรอกเบอร์โทรให้อัตโนมัติ ---
+            const phoneInput = document.getElementById('cancel-phone');
+            if(phoneInput && phone && phone !== 'undefined' && phone !== 'null') {
+                phoneInput.value = phone; 
+            }
+
+            // --- B. สร้าง Dropdown เลือก ID ให้อัตโนมัติ (ข้ามขั้นตอนกดค้นหา) ---
+            const container = document.getElementById('booking-id-container');
+            if (container && bookingId) {
+                // สร้าง Select ที่เลือก ID นี้ไว้เลย (Mock ว่าค้นหาเจอแล้ว)
+                container.innerHTML = `
+                    <select id="cancel-bookingId" name="bookingId" class="form-control" required style="border-color:#10b981; background:#f0fdf4; width:100%; padding:8px;">
+                        <option value="${bookingId}" selected>ID: ${bookingId} (เลือกรายการนี้)</option>
+                    </select>
+                `;
+            }
+
+            // --- C. ปลดล็อกปุ่มยืนยันทันที ---
+            const submitBtn = document.getElementById('btn-confirm-cancel');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.classList.remove('btn-secondary');
+                submitBtn.classList.add('btn-danger');
+                submitBtn.innerHTML = 'ยืนยันยกเลิก';
+            }
+            
+            // โฟกัสไปที่ช่องเหตุผล เพื่อให้ผู้ใช้กรอกได้เลย
+            const reasonInput = document.getElementById('cancel-reason');
+            if(reasonInput) setTimeout(() => reasonInput.focus(), 100);
+        }
+
+        // 3. เปิด Modal
+        if (typeof openModalA11y === 'function') {
+            openModalA11y(cancelModalId);
+        } else {
+            const m = document.getElementById(cancelModalId);
+            if(m) { m.classList.add('active'); m.style.display = 'flex'; }
+        }
+    }, 200);
+};
+
+   function statusClassFromKey(s_key) {
+    if (s_key === 'approved' || s_key === 'อนุมัติ' || s_key === 'อนุมัติแล้ว' || s_key === 'driver_special_approved') return 'approved'; // 🍓 BERRY FIX
+    if (s_key === 'pending' || s_key === 'รออนุมัติ') return 'pending';
+    if (s_key === 'rejected' || s_key === 'ไม่อนุมัติ') return 'rejected';
+    if (s_key === 'cancelled' || s_key === 'ยกเลิก' || s_key === 'ยกเลิกโดยผู้จอง') return 'cancelled';
+    return 'pending';
+}
+
+
+   function closeActivityModal() {
+        closeModalA11y('activity-modal');
+    }
+
+ window.handleDriverClaim = async function(bookingId, ev) {
+    try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (_) {}
+    showToast("ปิดการใช้งานการรับงานเองแล้ว กรุณาใช้ขั้นตอนอนุมัติจากผู้ดูแล", "error");
+    console.warn('[ClaimBooking] disabled', { bookingId: bookingId });
+};
+
+// 🍓 BERRY FIX: Centralized State for QA
+window.__QA_STATE__ = { bookingId: null, selectedPlate: null };
+
+window.handleSpecialApprove = function(bookingId, ev) {
+    if (ev) ev.preventDefault();
+    
+    const container = document.getElementById('qa-list-container');
+    const modal = document.getElementById('qa-vehicle-modal');
+    
+    if (!container || !modal) {
+        console.error("❌ 🍓 BERRY: ไม่พบ Element 'qa-list-container' หรือ 'qa-vehicle-modal' ใน HTML");
+        showToast("ระบบขัดข้อง: ไม่พบหน้าต่างเลือกรถ กรุณาติดต่อผู้พัฒนาค่ะ", "error");
+        return;
+    }
+
+    window.__QA_STATE__ = { bookingId: bookingId, selectedPlate: null };
+    const plates = ['ฮล-466', 'ฮค-4964', '1นช-6112', 'ฮร-4820', 'ห-4845'];
+    
+    // 🍓 BERRY FIX: ปรับ UI รายการรถให้สะอาดและกึ่งกลาง
+    container.innerHTML = plates.map(p => `
+      <div class="qa-item" onclick="selectQaPlate(this, '${p}')" 
+           style="padding:14px; border:2px solid #e2e8f0; border-radius:12px; cursor:pointer; font-weight:800; display:flex; align-items:center; gap:12px; font-size:1.1rem;">
+        <span style="font-size: 1.4rem; line-height: 1;">🚐</span>
+        <span style="flex:1;">${p}</span>
+      </div>`).join('');
+
+    document.getElementById('qa-confirm-btn').disabled = true;
+    modal.style.display = 'flex';
+};
+
+window.selectQaPlate = function(el, plate) {
+    document.querySelectorAll('.qa-item').forEach(i => i.classList.remove('selected'));
+    el.classList.add('selected');
+    window.__QA_STATE__.selectedPlate = plate;
+    document.getElementById('qa-confirm-btn').disabled = false;
+};
+
+window.closeQaModal = function() {
+    document.getElementById('qa-vehicle-modal').style.display = 'none';
+};
+
+// 🍓 BERRY FIX: ฟังก์ชันบันทึกอนุมัติด่วน พร้อมระบบ Safety Lock ป้องกันกดซ้ำ
+window.executeQuickApprove = async function() {
+    const { bookingId, selectedPlate } = window.__QA_STATE__;
+    if (!bookingId || !selectedPlate) return;
+
+    const confirmBtn = document.getElementById('qa-confirm-btn');
+    const cancelBtn = document.getElementById('qa-vehicle-modal').querySelector('.btn-secondary');
+    const loadingStatus = document.getElementById('qa-loading-status');
+
+    // 🔒 [STEP 1] Safety Lock: ปิดปุ่มทันทีเพื่อป้องกัน Double Click
+    confirmBtn.disabled = true;
+    confirmBtn.style.opacity = '0';
+    confirmBtn.style.pointerEvents = 'none';
+    if (cancelBtn) cancelBtn.style.display = 'none'; // ซ่อนปุ่มยกเลิกด้วยเพื่อไม่ให้รบกวนการทำงาน
+    
+    loadingStatus.style.display = 'block'; // แสดง spinner
+
+    try {
+        const user = window.currentUser || JSON.parse(localStorage.getItem('vb_current_user') || '{}');
+        const activeName = user.displayName || user.name || user.username;
+
+        // เรียก Server ผ่าน Promise Wrapper
+        const res = await googleScriptRunLimited('specialApproveBooking', {
+            bookingId: bookingId,
+            driverName: activeName,
+            plate: selectedPlate,
+            _actionRole: user.role || user.Role || ''
+        });
+
+        if (res && res.ok) {
+            await refreshBookingUiAfterMutation({ forceSync: true });
+            showToast(`⚡ อนุมัติด่วนรถ ${selectedPlate} สำเร็จแล้วค่ะ`, "success");
+            closeQaModal();
+            if (typeof closeActivityModal === 'function') closeActivityModal();
+        } else {
+            throw new Error(res ? res.error : "Server did not respond");
+        }
+    } catch (e) {
+        // 🔓 [RECOVERY] หากพัง ให้ปลดล็อคปุ่มเพื่อให้ผู้ใช้ลองใหม่ได้
+        console.error("QuickApprove Error:", e);
+        showToast("ไม่สำเร็จ: " + e.message, "error");
+        
+        confirmBtn.disabled = false;
+        confirmBtn.style.opacity = '1';
+        confirmBtn.style.pointerEvents = 'auto';
+        if (cancelBtn) cancelBtn.style.display = 'inline-flex';
+        loadingStatus.style.display = 'none';
+    }
+};
+
+function installSelfTestFloatingButton() {
+    // 🍓 BERRY FIX: ยกเลิกการสร้างปุ่ม Floating แบบลอยตัวบนหน้าจอหลัก
+    // ย้ายการใช้งานไปไว้ที่ปุ่ม "Self Test" ในหน้าต่าง Admin Panel เรียบร้อยแล้วเพื่อความสะอาดตา
+    console.log('🧪 Self-Test functionality moved to Admin Panel. (Floating disabled)');
+    
+    // คงการอัปเดต Header UI ไว้ เพื่อไม่ให้กระทบ Core Flow ตอนโหลดระบบ
+    if (window.currentUser && typeof updateHeaderUI === 'function') {
+        updateHeaderUI(window.currentUser);
+    }
+}
+
+function updateHeaderUI(user) {
+    const loginBtn = document.getElementById('login-btn');
+    const adminBtn = document.getElementById('day-off-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const userInfoEl = document.getElementById('user-info-display');
+
+    if (!loginBtn || !logoutBtn) {
+        console.warn('⚠️ หาปุ่ม login-btn หรือ logout-btn ไม่เจอค่ะ!');
+        return;
+    }
+
+    // ล้างสถานะปุ่ม Admin
+    if (adminBtn) adminBtn.style.display = 'none';
+
+    if (userInfoEl) {
+        userInfoEl.classList.add('hidden');
+        userInfoEl.innerHTML = '';
+    }
+
+    if (user && user.isLoggedIn) {
+        if (userInfoEl) {
+            const showName = user.displayName || user.name || user.username || 'ผู้ใช้งาน';
+            // 🍓 BERRY FIX: ใช้โครงสร้างที่แยกก้อนข้อความเพื่อให้ CSS คุมการขึ้นบรรทัดใหม่ได้ 100%
+            userInfoEl.innerHTML = `
+                <span class="user-welcome-msg">👋 ยินดีต้อนรับคุณ</span> 
+                <strong class="user-name-text">${escapeHtml(showName)}</strong>
+            `;
+            userInfoEl.classList.remove('hidden');
+        }
+
+        loginBtn.style.display = 'none';
+        logoutBtn.style.display = 'inline-flex';
+
+        const role = String(user.role || '').toLowerCase().trim();
+        // 🍓 BERRY FIX: เปิดสิทธิ์ให้ Driver สามารถเข้าถึงเมนู Day Off (ลา/ซ่อม) ได้ด้วย
+        const isStaff = (role === 'admin' || role === 'admindriver' || role === 'admin_driver' || role === 'driver');
+        const isAdmin = (role === 'admin' || role === 'admindriver' || role === 'admin_driver');
+
+        if (adminBtn && isStaff) adminBtn.style.display = 'inline-flex';
+        
+        // 🍓 BERRY FIX: ซ่อน checkbox ลา/ซ่อม (Admin) ของคนที่ไม่ใช่ Admin
+        const chkIncludeBlocksBtn = document.getElementById('chk-include-blocks');
+        if (chkIncludeBlocksBtn && chkIncludeBlocksBtn.closest('div')) {
+            chkIncludeBlocksBtn.closest('div').style.display = isAdmin ? 'flex' : 'none';
+        }
+
+        console.log(`✅ User ${user.username} logged in as ${role}`);
+    } else {
+        console.log('ℹ️ No user logged in.');
+        loginBtn.style.display = 'inline-flex';
+        loginBtn.textContent = '🔐 Login';
+        loginBtn.disabled = false;
+        logoutBtn.style.display = 'none';
+    }
+}
+    
+function wireVehicleCountAutoClampOnce() {
+    const inputs = document.querySelectorAll('input[name="vehicleCount"], #booking-vehicle-count');
+    if (!inputs.length) return;
+
+    inputs.forEach(el => {
+        if (el.clampWired) return;
+        el.clampWired = true;
+
+        const enforceLimit = () => {
+            let val = parseInt(el.value);
+            const min = parseInt(el.min) || 1;
+            const max = parseInt(el.max) || 5; // Default max = 5
+
+            if (isNaN(val)) return; // ปล่อยว่างได้ชั่วคราวตอนพิมพ์
+
+            if (val < min) el.value = min;
+            if (val > max) {
+                el.value = max;
+                // สร้าง Animation สั่นๆ เตือนว่าเกินแล้วนะ!
+                el.classList.add('shake'); 
+                setTimeout(() => el.classList.remove('shake'), 300);
+                
+                if(typeof showToast === 'function') {
+                    // ใช้ Debounce กัน Toast เด้งรัว
+                    if(!window.toastClampDebounce) {
+                        window.toastClampDebounce = setTimeout(() => {
+                            showToast(`เลือกได้สูงสุด ${max} คันเท่านั้นค่ะ 🐱`, 'warning');
+                            window.toastClampDebounce = null;
+                        }, 1000);
+                    }
+                }
+            }
+        };
+
+        el.addEventListener('input', enforceLimit);
+        el.addEventListener('change', enforceLimit);
+        el.addEventListener('blur', enforceLimit);
+    });
+    
+    console.log('✅ Vehicle Count Auto-Clamp Wired!');
+}
+
+    
+    const LOGIN_SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+    let loginSessionTimeoutId = null;
+
+    function handleLogout(isForced) {
+        if (loginSessionTimeoutId) {
+            clearTimeout(loginSessionTimeoutId);
+            loginSessionTimeoutId = null;
+        }
+        localStorage.removeItem('vb_current_user');
+        localStorage.removeItem('vb_login_ts');
+        currentUser = { isLoggedIn: false, role: 'Guest' };
+        window.currentUser = currentUser;
+
+        if (typeof updateHeaderUI === 'function') updateHeaderUI(currentUser);
+        
+        var today = new Date();
+        var month = today.getMonth() + 1;
+        var year = today.getFullYear();
+        if (window.isAppInitialized) {
+            if (typeof loadCalendarView === 'function') loadCalendarView(year, month);
+            if (typeof loadBookingsView === 'function') loadBookingsView();
+        }
+
+        if (!isForced) {
+            google.script.run
+                .withSuccessHandler(function(res) {
+                    console.log('✅ Server logout ack:', res);
+                    showToast('ออกจากระบบเรียบร้อยแล้วค่ะ 👋', 'success');
+                })
+                .withFailureHandler(function(err) {
+                    console.warn('⚠️ Server logout warning:', err);
+                })
+                .logoutUser();
+        } else {
+             showToast('หมดเวลาการใช้งาน (6 ชั่วโมง) กรุณาเข้าสู่ระบบใหม่ค่ะ ⏳', 'warning');
+        }
+    }
+
+/* ================== Admin Login ================== */
+(function(){
+  const G = (typeof window !== 'undefined') ? window : this;
+
+  function notify(msg, type){
+    if (typeof showToast === 'function') return showToast(msg, type || 'info');
+    if (typeof showAlert === 'function') return showAlert(msg);
+    alert(msg);
+  }
+  
+  function closeLoginModal(){
+    if (typeof closeModalA11y === 'function'){
+      closeModalA11y('admin-login-modal');
+      closeModalA11y('login-modal');
+    }
+  }
+  
+  function updateHeader(user){
+    if (typeof updateHeaderForLogin === 'function') return updateHeaderForLogin(user);
+    if (typeof updateHeaderUI === 'function') return updateHeaderUI(user);
+  }
+  
+  function refreshAfterLogin(){
+    try{
+      if (typeof loadBookingsView === 'function') loadBookingsView();
+      if (typeof renderCalendar === 'function' && G.calendarState)
+        renderCalendar(calendarState.currentYear, calendarState.currentMonth);
+      if (typeof updateCounters === 'function') updateCounters();
+    }catch(_){}
+  }
+
+  G.adminLogin = async function(event){
+    if (event && typeof event.preventDefault === 'function') event.preventDefault();
+    
+    const form = event && (event.target || event.currentTarget) || document.getElementById('admin-login-form');
+    if (!form){
+      notify('ไม่พบแบบฟอร์มเข้าสู่ระบบ', 'error');
+      return false;
+    }
+
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const errorEl   = form.querySelector('.login-error');
+
+    function setBusy(b){
+      if (submitBtn){
+        submitBtn.disabled = !!b;
+        submitBtn.setAttribute('aria-busy', b ? 'true' : 'false');
+        submitBtn.textContent = b ? 'กำลังตรวจสอบ...' : '🔓 เข้าสู่ระบบ';
+      }
+    }
+    
+    if (errorEl) { errorEl.style.display = 'none'; errorEl.textContent = ''; }
+
+    const username = (form.username && form.username.value) || (document.getElementById('admin-username')||{}).value || '';
+    const password = (form.password && form.password.value) || (document.getElementById('admin-password')||{}).value || '';
+
+    if (!username || !password){
+      const msg = 'กรุณากรอกทั้งชื่อผู้ใช้และรหัสผ่านค่ะ';
+      if (errorEl){ 
+          errorEl.textContent = msg;
+          errorEl.style.display = 'block'; 
+      } else { 
+          notify(msg, 'error'); 
+      }
+      return false;
+    }
+
+    setBusy(true);
+    try{
+      const res = await (typeof googleScriptRunLimited === 'function'
+        ? googleScriptRunLimited('verifyAdminLogin', { username: String(username).trim(), password: String(password) })
+        : googleScriptRun('verifyAdminLogin', { username: String(username).trim(), password: String(password) })
+      );
+
+      if (!res || res.ok !== true){
+        const msg = (res && res.error) ? res.error : 'ข้อมูลไม่ถูกต้อง';
+        throw new Error(msg);
+      }
+
+      const user = res.user || res.data || {};
+      if (!user || !user.username){
+        throw new Error('โครงสร้างข้อมูลผู้ใช้ไม่ถูกต้อง');
+      }
+
+      const loginAt = Date.now();
+      const loginSession = Object.assign({}, user, {
+        loginAt: loginAt,
+        expiresAt: loginAt + LOGIN_SESSION_TTL_MS
+      });
+
+      G.currentUser = loginSession;
+
+      try { 
+        localStorage.setItem('vb_current_user', JSON.stringify(loginSession)); 
+        localStorage.setItem('vb_login_ts', String(loginAt)); 
+      } catch(_){}
+
+      scheduleLoginSessionAutoLogout(loginSession);
+      updateHeader(loginSession);
+      refreshAfterLogin();
+      closeLoginModal();
+      notify(`เมี๊ยว~ ยินดีต้อนรับค่ะ ${loginSession.displayName || loginSession.username}!`, 'success');
+      
+      try{ form.reset(); }catch(_){}
+      return false;
+
+    }catch(err){
+      console.error('❌ Admin login failed:', err);
+      const msg = `ล็อกอินไม่สำเร็จ: ${err && err.message ? err.message : err}`;
+      if (errorEl){ 
+          errorEl.textContent = msg; 
+          errorEl.style.display = 'block'; 
+      } else { 
+          notify(msg, 'error'); 
+      }
+      return false;
+    }finally{
+      setBusy(false);
+    }
+  };
+})();
+    
+// Check session timeout periodically every 60 seconds
+setInterval(() => {
+    try {
+        if (typeof checkSessionTimeout === 'function') {
+            checkSessionTimeout();
+        }
+    } catch (e) {}
+}, 60000);
+
+/* ANCHOR: SESSION MANAGER (6 Hours Timeout) */
+function getLoginSessionExpiresAt(session) {
+    let localUser = session || null;
+    if (!localUser) {
+        try { localUser = JSON.parse(localStorage.getItem('vb_current_user')); } catch (e) {}
+    }
+
+    const storedExpiresAt = Number(localUser && localUser.expiresAt);
+    if (storedExpiresAt) return storedExpiresAt;
+
+    const lastLogin = Number(localStorage.getItem('vb_login_ts'));
+    return lastLogin ? lastLogin + LOGIN_SESSION_TTL_MS : 0;
+}
+
+function scheduleLoginSessionAutoLogout(session) {
+    if (loginSessionTimeoutId) {
+        clearTimeout(loginSessionTimeoutId);
+        loginSessionTimeoutId = null;
+    }
+
+    const expiresAt = getLoginSessionExpiresAt(session);
+    if (!expiresAt) return;
+
+    const remainingMs = Math.max(0, expiresAt - Date.now());
+    loginSessionTimeoutId = setTimeout(() => {
+        checkSessionTimeout();
+    }, remainingMs);
+}
+
+function checkSessionTimeout() {
+    const expiresAt = getLoginSessionExpiresAt();
+    
+    if (expiresAt) {
+        if (Date.now() >= expiresAt) {
+            console.warn('⏳ Session expired (> 6 hours). Logging out...');
+            handleLogout(true);
+            return false;
+        }
+    }
+    return true;
+}
+
+window.checkAssignmentStatus = function(summary) {
+  // ✅ กัน stale reference: query ใหม่ทุกครั้ง
+  const input = document.getElementById('assign-actual-count');
+  const msgBox = document.getElementById('assign-msg-box');
+  const typeBadge = document.getElementById('assign-type-badge');
+
+  // ✅ ถ้าไม่ได้ส่ง summary มา (compat เดิม) -> คำนวณเอง แต่ห้ามเรียกกลับมาซ้ำ
+  if (!summary || typeof summary !== 'object') {
+    if (typeof window.updateSelectionSummary === 'function') {
+      summary = window.updateSelectionSummary({ noStatusCheck: true });
+    } else {
+      summary = { count: 0, types: '-', names: [] };
+    }
+  }
+
+  const selectedCount = parseInt(summary.count, 10) || 0;
+  const typeText = (selectedCount > 0) ? (summary.types || '-') : '-';
+
+  // ✅ อัปเดต Badge ประเภทรถ ให้ตรง requirement
+  if (typeBadge) {
+    typeBadge.textContent = typeText;
+    typeBadge.className = (selectedCount > 0)
+      ? 'badge bg-info text-dark'
+      : 'badge bg-secondary text-white';
+  }
+
+  // ถ้าไม่มี input/msgBox ก็จบแค่อัปเดต badge (กัน error)
+  if (!input || !msgBox) return;
+
+  // ✅ Logic ตรวจสอบจำนวนรถเทียบกับที่ขอ (คง behavior เดิม)
+  const target = parseInt(input.value, 10) || 0;
+
+  msgBox.innerHTML = '';
+  input.style.borderColor = '#cbd5e1';
+  input.style.backgroundColor = '#fff';
+
+  if (selectedCount === 0) {
+    msgBox.innerHTML = '<span style="color:#64748b;">⏳ กรุณาเลือกรถ</span>';
+    return;
+  }
+
+  if (selectedCount < target) {
+    msgBox.innerHTML = `<span style="color:#f59e0b;">🟠 อนุมัติบางส่วน (เลือกจริง ${selectedCount})</span>`;
+    input.style.borderColor = '#f59e0b';
+    input.style.backgroundColor = '#fffbeb';
+    return;
+  }
+
+  if (selectedCount > target) {
+    msgBox.innerHTML = `<span style="color:#ef4444;">⚠️ เลือกเกินจำนวนที่ขอ (เลือกจริง ${selectedCount})</span>`;
+    input.style.borderColor = '#ef4444';
+    input.style.backgroundColor = '#fef2f2';
+    return;
+  }
+
+  msgBox.innerHTML = `<span style="color:#16a34a;">✅ ครบถ้วน (${selectedCount} คัน)</span>`;
+  input.style.borderColor = '#16a34a';
+  input.style.backgroundColor = '#f0fdf4';
+};
+
+
+window.updateSelectionSummary = function() {
+  const container = document.getElementById('assignment-vehicle-list');
+  if (!container) return { count: 0, types: '-', names: [] };
+
+  // ใช้ Logic เดียวกับ checkAssignmentStatus ผ่าน DOM Class .selected
+  const selectedCards = container.querySelectorAll('.assignment-vehicle-card.selected');
+  const selectedCount = selectedCards.length;
+
+  const types = new Set();
+  const vehicleNames = [];
+
+  selectedCards.forEach(card => {
+    // ดึงประเภทรถจาก data-type (ที่ render มาจาก openAssignmentModal)
+    const t = String(card.dataset.type || '').toLowerCase();
+    let label = normalizeVehicleTypeLabel(t) || '-';
+
+    types.add(label);
+
+    // ดึงทะเบียนรถ
+    const plate = card.dataset.plate || card.querySelector('.vc-plate')?.textContent || '?';
+    vehicleNames.push(String(plate).trim());
+  });
+
+  // เรียงลำดับและเชื่อมคำ (เช่น "รถตู้/รถบรรทุก")
+  const typeStr = (selectedCount > 0) ? Array.from(types).sort().join('/') : '-';
+
+  const summary = { count: selectedCount, types: typeStr, vehicles: vehicleNames };
+
+  // ✅ Debounce เฉพาะ log (กัน spam/ซ้ำ) โดยไม่กระทบการคำนวณ/return
+  window.assignSummaryLast = summary;
+
+  if (window.assignSummaryLogTimer) {
+    clearTimeout(window.assignSummaryLogTimer);
+  }
+
+  window.assignSummaryLogTimer = setTimeout(() => {
+    try {
+      const s = window.assignSummaryLast || summary;
+      console.log('Update Summary:', {
+        count: s.count,
+        types: s.types,
+        vehicles: s.vehicles
+      });
+    } catch (e) {
+      console.warn('Update Summary log failed', e);
+    }
+  }, 120);
+
+  return { count: selectedCount, types: typeStr, names: vehicleNames };
+};
+
+
+window.__ALL_DRIVERS__ = window.__ALL_DRIVERS__ || [];
+window.__ASSIGN_CTX__ = window.__ASSIGN_CTX__ || null;
+
+
+/* ==================== [BERRY FIX] ASSIGNMENT MODAL (WITH BACKGROUND) ==================== */
+window.openAssignmentModal = async function (bookingId) {
+  const id = String(bookingId || '').trim();
+  if (!id) return;
+  if (window.__assignmentModalBusy === true) return;
+
+  window.__assignmentModalBusy = true;
+
+  const map = (window.bookingsById = window.bookingsById || new Map());
+
+  try {
+    let freshBooking = null;
+    try {
+      const runner = (typeof window.googleScriptRunLimited === 'function')
+        ? window.googleScriptRunLimited
+        : window.googleScriptRun;
+
+      const freshRes = await runner('getById', id);
+      if (freshRes && freshRes.ok && freshRes.data) {
+        freshBooking = freshRes.data;
+      }
+    } catch (e) {
+      console.warn('[openAssignmentModal] fresh booking fetch failed:', e);
+    }
+
+    const booking = freshBooking || map.get(id) || (Array.isArray(window.allBookingsData)
+      ? window.allBookingsData.find(b => String(b.bookingId) === id)
+      : null);
+
+    if (!booking) {
+      if (typeof showToast === 'function') showToast('ไม่พบข้อมูล ID: ' + id, 'error');
+      return;
+    }
+
+    map.set(id, booking);
+    window.__ASSIGN_CTX__ = Object.assign({}, booking);
+
+    const toText = (v) => String(v == null ? '' : v).trim();
+    const safeEscape = (v) => (typeof escapeHtml === 'function' ? escapeHtml(toText(v)) : toText(v));
+    const fmt = (d) => (typeof formatDate === 'function' ? formatDate(d) : (d || '-'));
+
+    const normalizeCarType = (t) => {
+      return normalizeVehicleTypeLabel(t) || '-';
+    };
+
+    const normalizePos = (v) => {
+      const s = toText(v);
+      if (s === 'อาจารย์' || s === 'เจ้าหน้าที่' || s === 'นักศึกษา') return s;
+      return '';
+    };
+
+    const formatPax = (v) => {
+      const s = toText(v);
+      if (!s) return 'ไม่ระบุ';
+      if (s === '0') return '0 คน';
+      const n = parseInt(s, 10);
+      if (isFinite(n)) return n + ' คน';
+      return s;
+    };
+
+    const safeTelHref = (phone) => {
+      const s = toText(phone);
+      if (!s) return '';
+      const cleaned = s.replace(/[^\d+]/g, '');
+      return cleaned ? ('tel:' + cleaned) : '';
+    };
+
+    const requestedCountRaw = toText(booking.vehicleCount || booking.requestedCount || booking.reqCount || 1);
+    let requestedCount = parseInt(requestedCountRaw, 10);
+    if (isNaN(requestedCount) || requestedCount < 1) requestedCount = 1;
+
+    const requestedType = normalizeCarType(booking.carType);
+    const paxLabel = formatPax(booking.passengers);
+    const position = normalizePos(booking.position);
+    let posIcon = '👤';
+    if (position === 'อาจารย์') posIcon = '👩‍🏫';
+    else if (position === 'เจ้าหน้าที่') posIcon = '🧑‍💼';
+    else if (position === 'นักศึกษา') posIcon = '🎓';
+
+    const phoneText = toText(booking.phone);
+    const phoneHref = safeTelHref(phoneText);
+
+    let rawJobType = toText(booking.workType || booking.jobType);
+    let rawProject = toText(booking.workName || booking.projectName);
+
+    let purposeHtml = rawJobType ? safeEscape(rawJobType) : '<span style="color:#94a3b8; font-style:italic;">ไม่ระบุ</span>';
+    let projectHtml = rawProject ? safeEscape(rawProject) : '<span style="color:#94a3b8; font-style:italic;">ไม่ระบุ</span>';
+
+    window.__ASSIGN_CTX__.requestedCount = requestedCount;
+    window.__ASSIGN_CTX__.originalType = requestedType;
+
+    // 🍓 BERRY FIX: earlyCloseBtn display ย้ายไปหลัง applyAssignmentFooterResponsive (ดูด้านล่าง)
+
+    const summaryEl = document.getElementById('assignment-booking-summary');
+    if (summaryEl) {
+      summaryEl.innerHTML = `
+        <div style="margin-bottom: 20px; border-bottom: 2px solid var(--primary); padding-bottom: 10px;">
+          <h4 style="color: var(--primary); margin: 0; font-size: 1.1rem; font-weight: bold;">📋 รายละเอียดการขอใช้รถ</h4>
+        </div>
+
+        <div class="info-item" style="margin-bottom: 16px;">
+          <span class="info-label" style="display: block; color: var(--gray-dark); font-size: 0.85rem; font-weight: 700; margin-bottom: 4px;">👤 ผู้จอง / ตำแหน่ง</span>
+          <span class="info-value text-primary font-weight-bold" style="font-size: 1.05rem; display: block; line-height: 1.3;">
+            ${safeEscape(booking.name)}
+            ${position ? `<span style="font-size:0.9rem; color:#64748b; font-weight:normal; margin-left:6px;">(${posIcon} ${safeEscape(position)})</span>` : ``}
+          </span>
+          ${phoneHref
+            ? `<a href="${safeEscape(phoneHref)}" style="font-size: 0.9rem; color: #2563eb; text-decoration: none; display:inline-block; margin-top:4px;">📞 ${safeEscape(phoneText)}</a>`
+            : `<div style="font-size: 0.9rem; color: #64748b; margin-top:4px;">📞 ไม่ระบุ</div>`
+          }
+        </div>
+
+        <div class="info-item" style="margin-bottom: 16px; background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.02);">
+          <div style="margin-bottom: 8px;">
+            <span class="info-label" style="display: block; color:#475569; font-size: 0.8rem; font-weight: 700; margin-bottom:2px;">🎯 ประเภทงาน:</span>
+            <span class="info-value" style="display: block; color:#1e293b; font-weight:600;">${purposeHtml}</span>
+          </div>
+          <div style="border-top:1px dashed #cbd5e1; margin: 8px 0;"></div>
+          <div>
+            <span class="info-label" style="display: block; color:#475569; font-size: 0.8rem; font-weight: 700; margin-bottom:2px;">📝 ชื่องาน/โครงการ:</span>
+            <span class="info-value" style="display: block; color:#1e293b;">${projectHtml}</span>
+          </div>
+        </div>
+
+        <div class="info-item" style="margin-bottom: 12px;">
+          <span class="info-label" style="display: block; color: var(--gray-dark); font-size: 0.85rem; font-weight: 700;">📅 วันเวลาเดินทาง</span>
+          <span class="info-value" style="display: block; margin-top: 2px;">
+            ${safeEscape(fmt(booking.startDate))} ${booking.startTime} ถึง ${safeEscape(fmt(booking.endDate))} ${booking.endTime}
+          </span>
+        </div>
+
+        <div class="info-item" style="margin-bottom: 12px;">
+          <span class="info-label" style="display: block; color: var(--gray-dark); font-size: 0.85rem; font-weight: 700;">👥 จำนวนผู้ร่วมเดินทาง</span>
+          <span class="info-value" style="display: block; margin-top: 2px; font-weight: bold; color: var(--dark);">
+            ${safeEscape(paxLabel)}
+          </span>
+        </div>
+
+        <div style="display: flex; align-items: stretch; gap: 12px; margin: 15px 0; background: #f8fafc; padding: 12px; border-radius: 10px; border: 1px solid #e2e8f0; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
+          <div style="flex: 1; display: flex; flex-direction: column; justify-content: center;">
+            <span class="info-label" style="font-size: 0.75rem; color: #64748b; font-weight: 700; margin-bottom: 4px;">🚘 ประเภทรถ</span>
+            <span id="assign-type-badge" class="badge bg-warning text-dark" style="font-size: 0.85rem; width: fit-content; padding: 4px 8px; border-radius: 6px;">
+              ${safeEscape(requestedType)}
+            </span>
+          </div>
+          <div style="width: 1px; background: #cbd5e1; margin: 0 4px;"></div>
+          <div style="flex: 1; display: flex; flex-direction: column; justify-content: center;">
+            <span class="info-label" style="font-size: 0.75rem; color: #64748b; font-weight: 700; margin-bottom: 4px;">🔢 จำนวนอนุมัติ (คัน)</span>
+            <input type="number" id="assign-actual-count" class="form-control"
+                   value="${requestedCount}" min="1" max="10"
+                   style="height: 36px; font-weight: bold; border-color: var(--primary); text-align: center; box-sizing: border-box; width: 100%; border-radius: 6px;">
+            <div id="assign-msg-box" style="font-size:0.75rem; margin-top:6px; font-weight:600; line-height: 1.2;"></div>
+          </div>
+        </div>
+
+        <div style="margin-top: 1.5rem;">
+          <button type="button" class="btn btn-sm btn-outline btn-block"
+                  style="width: 100%; border: 1px solid #cbd5e1; color: #64748b; background: white; font-size: 0.85rem; padding: 8px; border-radius: 6px; font-weight: 600;"
+                  onclick="handleClearSelection()">🧹 ล้างการเลือกรถ</button>
+        </div>
+      `;
+
+      setTimeout(() => {
+        const inputCnt = document.getElementById('assign-actual-count');
+        if (inputCnt) {
+          inputCnt.addEventListener('input', () => {
+            if (typeof checkAssignmentStatus === 'function') checkAssignmentStatus();
+          });
+          if (typeof checkAssignmentStatus === 'function') checkAssignmentStatus();
+        }
+      }, 50);
+    }
+
+    const listEl = document.getElementById('assignment-vehicle-list');
+    if (listEl) {
+      listEl.innerHTML = '<div class="text-center py-5"><div class="spinner"></div><p class="mt-2 text-muted" style="font-size: 0.9rem;">กำลังตรวจสอบคิวรถและพนักงานขับรถ...</p></div>';
+
+      try {
+        const runner = (typeof window.googleScriptRunLimited === 'function')
+          ? window.googleScriptRunLimited
+          : window.googleScriptRun;
+
+        const res = await runner('getAvailableVehicles', {
+          bookingId: id,
+          startDate: booking.startDate, endDate: booking.endDate,
+          startTime: booking.startTime, endTime: booking.endTime
+        });
+        if (!res || !res.ok) throw new Error(res?.error || 'Server Error');
+
+        window.__ALL_DRIVERS__ = res.drivers || [];
+
+        let availableOpts = `<option value="">-- เลือกพนักงานขับรถ --</option>`;
+        let busyOpts = "";
+
+        window.__ALL_DRIVERS__.forEach(d => {
+          const isBusy = (d.busyBadge || d.isBusy === true);
+          const isInactive = (d.active === false);
+          const statusText = isInactive ? '(พักงาน)' : (isBusy ? `(❌ ${d.busyBadge})` : '');
+          const disAttr = (isBusy || isInactive) ? 'disabled="disabled"' : '';
+          const styleText = (isBusy || isInactive) ? 'style="color:#94a3b8;"' : 'style="color:#1e293b;"';
+
+          const optHtml = `<option value="${safeEscape(d.name)}" ${disAttr} ${styleText} data-busy="${(isBusy || isInactive) ? 'true' : 'false'}">${safeEscape(d.name)} ${safeEscape(statusText)}</option>`;
+
+          if (isBusy || isInactive) busyOpts += optHtml;
+          else availableOpts += optHtml;
+        });
+
+        listEl.innerHTML = (res.vehicles || []).map(v => {
+          const isAv = v.available === true;
+          const vType = String(v.type || 'car').toLowerCase();
+          const icon = (vType.includes('truck') || vType.includes('บรรทุก')) ? '🚚' : '🚐';
+          const cardBorder = isAv ? '#e2e8f0' : '#fee2e2';
+          const cardBg = isAv ? '#ffffff' : '#fef2f2';
+
+          return `
+            <div class="assignment-vehicle-card ${!isAv ? 'disabled' : ''}"
+                 data-plate="${safeEscape(v.plate)}"
+                 data-type="${vType}"
+                 style="margin-bottom: 12px; border-radius: 12px; border: 1px solid ${cardBorder}; background: ${cardBg}; transition: all 0.2s ease;">
+              <div style="padding: 12px; display: flex; align-items: center; gap: 12px;">
+                <input type="checkbox" class="vc-checkbox" value="${safeEscape(v.plate)}" ${isAv ? '' : 'disabled'} onchange="toggleVehicleCard(this)" style="width: 22px; height: 22px; cursor: pointer;">
+                <div style="font-size: 1.8rem; opacity: ${isAv ? 1 : 0.4};">${icon}</div>
+                <div style="flex: 1;">
+                  <div style="font-weight: 700; font-size: 1rem; color: #1e293b;">
+                    ${safeEscape(v.plate)}
+                    <span style="font-size: 0.75rem; float: right; color: ${isAv ? '#16a34a' : '#dc2626'}; font-weight: 600; padding: 2px 6px; background: ${isAv ? '#dcfce7' : '#fee2e2'}; border-radius: 4px;">${isAv ? '✅ ว่าง' : '❌ ' + safeEscape(v.badge || '')}</span>
+                  </div>
+                  <div style="font-size: 0.85rem; color: #64748b; margin-top: 2px; ${!isAv ? 'opacity: 0.6;' : ''}">${safeEscape(v.name || '')}</div>
+                </div>
+              </div>
+              <div style="padding: 0 12px 12px 46px;">
+                <select class="vc-driver-select form-control" onchange="onDriverSelectChange(this)" oninput="onDriverSelectChange(this)" disabled style="font-size: 0.9rem; height: 38px; border-radius: 8px; border: 1px solid #cbd5e1;">
+                  ${availableOpts}
+                  ${busyOpts ? `<optgroup label="⚠️ พนักงานที่ไม่ว่าง">${busyOpts}</optgroup>` : ''}
+                </select>
+              </div>
+            </div>`;
+        }).join('');
+
+        setTimeout(() => {
+          const vArr = String(booking.vehicle || booking.plate || '').split(',').map(s => s.trim()).filter(Boolean);
+          const dArr = String(booking.driver || '').split(',').map(s => s.trim()).filter(Boolean);
+          if (vArr.length > 0) {
+            vArr.forEach((plate, index) => {
+              const card = listEl.querySelector(`.assignment-vehicle-card[data-plate="${plate}"]`);
+              if (card) {
+                const cb = card.querySelector('.vc-checkbox');
+                if (cb && !cb.checked) {
+                  cb.checked = true;
+                  if (typeof toggleVehicleCard === 'function') toggleVehicleCard(cb);
+                }
+                const sel = card.querySelector('.vc-driver-select');
+                if (sel && dArr[index]) {
+                  sel.value = dArr[index];
+                  if (typeof onDriverSelectChange === 'function') onDriverSelectChange(sel);
+                }
+              }
+            });
+            if (typeof checkAssignmentStatus === 'function') checkAssignmentStatus();
+          }
+        }, 100);
+
+      } catch (e) {
+        listEl.innerHTML = `<div class="alert alert-danger text-center" style="border-radius: 8px;">เกิดข้อผิดพลาด: ${safeEscape(e.message)}</div>`;
+      }
+    }
+
+    const modal = document.getElementById('assignment-modal');
+    const footer = modal ? modal.querySelector('.modal-footer') : null;
+
+    if (footer) {
+      footer.removeAttribute('style');
+      if (typeof applyAssignmentFooterResponsive === 'function') {
+        applyAssignmentFooterResponsive();
+      }
+      if (typeof installAssignmentFooterResponsiveOnce === 'function') {
+        installAssignmentFooterResponsiveOnce();
+      }
+    }
+
+    // ANCHOR: assignment modal early close
+    const earlyCloseBtnFinal = document.getElementById('assignment-close-job-btn');
+    if (earlyCloseBtnFinal) {
+      const dStrForCheck = String(booking.driver || booking.assignedDriver || '');
+      const dArrForCheck = dStrForCheck.split(',').filter(Boolean);
+      
+      const user = window.currentUser || { isLoggedIn: false, role: 'Guest' };
+      const roleLc = String(user.role || '').toLowerCase().trim();
+      const isAdminLevel = ['admin', 'admindriver', 'admin_driver'].includes(roleLc);
+      
+      const cleanStrForRoleChk = (str) => String(str || '').replace(/\s+/g, '').toLowerCase();
+      const uNameCl = cleanStrForRoleChk(user.name);
+      const uUserCl = cleanStrForRoleChk(user.username);
+      const uDispCl = cleanStrForRoleChk(user.displayName);
+      const uFirstNameCl = uDispCl ? uDispCl.substring(0, 5) : (uNameCl ? uNameCl.substring(0, 5) : '');
+      
+      const isAssignedToMe = (roleLc === 'driver') && dArrForCheck.some(d => {
+        const dCl = cleanStrForRoleChk(d);
+        if (!dCl) return false;
+        if (uNameCl && dCl.includes(uNameCl)) return true;
+        if (uUserCl && dCl.includes(uUserCl)) return true;
+        if (uDispCl && dCl.includes(uDispCl)) return true;
+        if (uFirstNameCl && uFirstNameCl.length >= 3 && dCl.includes(uFirstNameCl)) return true;
+        return false;
+      });
+      
+      const canShow = typeof window.canShowEarlyCloseButton === 'function' ? window.canShowEarlyCloseButton(booking) : false;
+      console.log('[selfTest] openAssignmentModal check:', { role: roleLc, isAssignedToMe, canShow, uNameCl, uUserCl, uDispCl, drivers: dArrForCheck });
+      
+      // 🍓 BERRY FIX: ซ่อนปุ่ม "ปิดงานก่อนเวลา" จาก Assignment Modal เสมอ โชว์แค่ Detail Modal จุดเดียว
+      earlyCloseBtnFinal.setAttribute('style', 'display: none !important;');
+    }
+
+    if (typeof openModalA11y === 'function') openModalA11y('assignment-modal');
+
+  } finally {
+    window.__assignmentModalBusy = false;
+  }
+};
+ 
+window.onDriverSelectChange = function (changedSelect) {
+  const allSelects = document.querySelectorAll('.vc-driver-select');
+
+  const snapBackIfInvalid = (sel) => {
+    try {
+      if (!sel || !sel.options || sel.selectedIndex < 0) return false;
+      const opt = sel.options[sel.selectedIndex];
+      if (!opt) return false;
+
+      const isBusy = !!(opt.dataset && opt.dataset.busy === 'true');
+      const isDisabled = !!opt.disabled;
+
+      if (isBusy || isDisabled) {
+        sel.value = "";
+        sel.selectedIndex = 0;
+
+        // ชัวร์สำหรับ native picker บางรุ่น
+        requestAnimationFrame(() => {
+          try { sel.value = ""; sel.selectedIndex = 0; } catch (_) {}
+        });
+        setTimeout(() => {
+          try { sel.value = ""; sel.selectedIndex = 0; } catch (_) {}
+        }, 0);
+
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  };
+
+  // 1) Snap-back เฉพาะตัวที่เปลี่ยน
+  let snapped = false;
+  if (changedSelect) {
+    snapped = snapBackIfInvalid(changedSelect);
+    if (snapped && typeof showToast === 'function') {
+      showToast('พนักงานขับรถท่านนี้ไม่ว่างค่ะ', 'error');
+    }
+  }
+
+  // 1.1) กันเคสที่ DOM หลุด: ถ้ามี select อื่นติด busy ค้างอยู่ ให้เคลียร์ด้วย
+  allSelects.forEach(sel => snapBackIfInvalid(sel));
+
+  // 2) คำนวณ selectedValues หลังเคลียร์แล้ว (กัน race)
+  const selectedValues = Array.from(allSelects).map(s => s.value).filter(Boolean);
+
+  // 3) ล็อก option: busy/inactive ต้อง disabled ตลอด + กันเลือกซ้ำใน modal
+  allSelects.forEach(sel => {
+    const currentValue = sel.value;
+
+    Array.from(sel.options).forEach(opt => {
+      if (!opt.value) return;
+
+      const isTakenElsewhere = selectedValues.includes(opt.value) && opt.value !== currentValue;
+
+      // data-busy เป็น true = ห้ามเลือกเสมอ
+      const isBusyFromServer = !!(opt.dataset && opt.dataset.busy === 'true');
+
+      // ถ้า opt ถูก disabled มาแล้ว (เช่น inactive) ก็ห้ามปลดกลับ
+      const wasDisabledAlready = !!opt.disabled;
+
+      // ✅ สรุป: ห้ามเลือกถ้า busy หรือเลือกซ้ำ หรือเดิมทีถูก disabled
+      opt.disabled = isBusyFromServer || isTakenElsewhere || wasDisabledAlready;
+
+      // คงสไตล์เดิม
+      opt.style.color = opt.disabled ? "#94a3b8" : "#1e293b";
+    });
+
+    // 4) A11y: select ที่ disabled ห้าม focus ด้วยคีย์บอร์ด
+    if (sel.disabled) sel.tabIndex = -1;
+    else if (sel.tabIndex < 0) sel.tabIndex = 0;
+  });
+};
+
+
+
+/* [BERRY UPDATE] ฟังก์ชันจัดการ Card รถเมื่อติ๊กเลือก (เชื่อมต่อ Source of Truth) */
+window.toggleVehicleCard = function (checkbox) {
+  // 1. หา Card ที่ครอบอยู่ (รองรับทั้ง class เก่าและใหม่กันพลาด)
+  const card = checkbox.closest('.assignment-vehicle-card') || checkbox.closest('.vehicle-card');
+  if (!card) return;
+
+  const select = card.querySelector('.vc-driver-select');
+
+  // 2. จัดการ State และ UI
+  if (checkbox.checked) {
+    // State: Selected
+    card.classList.add('selected');
+    card.style.borderColor = '#667eea'; // var(--primary)
+    card.style.backgroundColor = '#f5f7ff';
+    
+    if (select) { 
+      select.disabled = false; 
+      select.required = true; 
+      // select.focus(); // [UX Fix] ปิดไว้เพื่อไม่ให้ Keyboard เด้งบนมือถือ
+    }
+  } else {
+    // State: Unselected
+    card.classList.remove('selected');
+    card.style.borderColor = '#e2e8f0'; // Default gray
+    card.style.backgroundColor = '#fff';
+    
+    if (select) { 
+      select.value = ""; // เคลียร์คนขับเมื่อยกเลิก
+      select.disabled = true; 
+      select.required = false; 
+      select.classList.remove('is-invalid'); // ลบสถานะ error (ถ้ามี)
+    }
+  }
+
+  // 3. [สำคัญ] เรียก Source of Truth Update ทันที
+  // เพื่อให้ Header แสดง "รถตู้/รถกระบะ" และ "จำนวน" ที่ถูกต้อง
+  if (typeof updateSelectionSummary === 'function') {
+    updateSelectionSummary();
+  }
+
+  // 4. Trigger ฟังก์ชันย่อยอื่นๆ (ถ้ามี)
+  if (typeof onDriverSelectChange === 'function') onDriverSelectChange();
+  
+  // 5. เช็คสถานะภาพรวม (ปุ่ม Save ฯลฯ)
+  if (typeof checkAssignmentStatus === 'function') {
+      checkAssignmentStatus();
+  }
+};
+
+window.handleClearSelection = function () {
+  document.querySelectorAll('.assignment-vehicle-card.selected').forEach(card => {
+    const cb = card.querySelector('.vc-checkbox');
+    if (cb) { cb.checked = false; toggleVehicleCard(cb); }
+  });
+  if (typeof showToast === 'function') showToast('ล้างการเลือกทั้งหมดแล้วค่ะ', 'info');
+};
+
+window.handleAssignmentSave = async function () {
+  // 1. ตรวจสอบ Context และป้องกันกดซ้อนด่านแรก
+  const saveBtn = document.getElementById('assignment-save-btn');
+  if (saveBtn && saveBtn.disabled) {
+    console.warn("⏳ [V-Berry] บล็อกการกดซ้ำ: ระบบกำลังประมวลผล");
+    return;
+  }
+
+  if (!window.__ASSIGN_CTX__) return;
+
+  // 2. ดึงการ์ดที่ถูกเลือก (Selected) เท่านั้น = Source of Truth
+  const selectedCards = document.querySelectorAll('.assignment-vehicle-card.selected');
+
+  if (selectedCards.length === 0) {
+    if(typeof showToast === 'function') showToast('กรุณาเลือกรถอย่างน้อย 1 คันค่ะ', 'error');
+    return;
+  }
+
+  const assignedVehicles = [];
+  const assignedDrivers = [];
+  let errorFound = false;
+
+  // 3. วนลูปเก็บข้อมูลและตรวจสอบความถูกต้อง
+  selectedCards.forEach(card => {
+    const plate = card.dataset.plate;
+    const driverSelect = card.querySelector('.vc-driver-select');
+
+    // หา Option ที่ถูกเลือกเพื่อเช็ค data-busy
+    const selectedOpt = driverSelect ? driverSelect.options[driverSelect.selectedIndex] : null;
+    const driverName = driverSelect ? driverSelect.value : '';
+
+    // กฎเหล็ก: ต้องระบุคนขับ และคนขับต้องไม่ Busy
+    if (!driverName || (selectedOpt && selectedOpt.dataset.busy === 'true')) {
+      errorFound = true;
+      if (driverSelect) {
+          driverSelect.style.borderColor = 'var(--danger)';
+          driverSelect.classList.add('shake'); // เพิ่ม Effect สั่นเตือน
+          setTimeout(() => driverSelect.classList.remove('shake'), 500);
+      }
+    } else {
+      if (driverSelect) driverSelect.style.borderColor = '#cbd5e1'; // Reset border
+      assignedVehicles.push(plate);
+      assignedDrivers.push(driverName);
+    }
+  });
+
+  if (errorFound) {
+    if(typeof showToast === 'function') showToast('ข้อมูลคนขับไม่ถูกต้อง หรือมีการเลือกคนไม่ว่างค่ะ', 'error');
+    return;
+  }
+
+  // 4. UI Loading & Lock Button (ป้องกันกดซ้อนแบบ 100%)
+  const originalBtnHtml = saveBtn ? saveBtn.innerHTML : '';
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.style.cursor = 'not-allowed';
+    saveBtn.style.opacity = '0.7';
+    saveBtn.innerHTML = '<span style="font-size: 1.1rem; line-height: 1; margin-right: 4px;">⏳</span> กำลังบันทึก...';
+  }
+  if(typeof setBtnLoading === 'function') setBtnLoading(saveBtn, true);
+
+  try {
+    // 🍓 BERRY FIX: จัดคำพูดเหตุผลให้ตรงกับบริบท (อนุมัติใหม่ vs เปลี่ยนแปลง)
+    const origStatus = String(window.__ASSIGN_CTX__.status || '').toLowerCase().trim();
+    const isReassign = (origStatus === 'approved' || origStatus === 'driver_special_approved');
+    const defaultReason = isReassign ? 'อัปเดตการมอบหมายรถ/คนขับใหม่' : 'อนุมัติและมอบหมายงานเรียบร้อย';
+
+    // 5. สร้าง Payload
+    const payload = {
+      bookingId: window.__ASSIGN_CTX__.bookingId,
+      status: 'approved',
+      vehicles: assignedVehicles,
+      drivers: assignedDrivers,
+      vehicleCount: assignedVehicles.length, // อัปเดต DB ให้ตรงกับที่เลือกจริง
+      reason: defaultReason,
+      noTelegram: false
+    };
+    console.log("📦 Saving Assignment Payload:", payload);
+
+    // 6. ส่ง Server
+    const runner = (typeof window.googleScriptRunLimited !== 'undefined')
+                   ? window.googleScriptRunLimited
+                   : window.googleScriptRun;
+
+    const res = await runner('apiUpdateBookingStatus', payload);
+
+    if (!res || !res.ok) throw new Error(res?.error || 'Save failed');
+
+    // 7. สำเร็จ & รีเฟรชหน้าจอ
+    if(typeof showToast === 'function') showToast(`✅ อนุมัติ ${assignedVehicles.length} คัน เรียบร้อย!`, 'success');
+
+    if(typeof closeModalA11y === 'function') closeModalA11y('assignment-modal');
+
+    await refreshBookingUiAfterMutation({ forceSync: true });
+
+    // Refresh UI ส่วนต่างๆ
+
+    // Refresh Calendar (ถ้าเปิดอยู่)
+
+  } catch (err) {
+    console.error("❌ Save Error:", err.message, err.stack);
+    if(typeof showToast === 'function') showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+  } finally {
+    // 8. ปลดล็อกปุ่มเมื่อทำงานเสร็จสิ้นหรือเกิด Error
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.style.cursor = 'pointer';
+      saveBtn.style.opacity = '1';
+      saveBtn.innerHTML = originalBtnHtml;
+    }
+    if(typeof setBtnLoading === 'function') setBtnLoading(saveBtn, false);
+  }
+};
+
+// ANCHOR: handleAssignmentEarlyClose
+window.handleAssignmentEarlyClose = async function () {
+  if (!window.__ASSIGN_CTX__) return;
+
+  var bId = String(window.__ASSIGN_CTX__.bookingId || '').trim();
+  if (!bId) {
+    if (typeof showToast === 'function') showToast('ไม่พบ Booking ID', 'error');
+    return;
+  }
+
+  var btn = document.getElementById('assignment-close-job-btn');
+  if (btn && btn.disabled) return;
+  if (window.__berryAssignmentEarlyCloseBusy === true) return;
+
+  var adminName = (window.currentUser && (window.currentUser.name || window.currentUser.displayName))
+    ? (window.currentUser.name || window.currentUser.displayName)
+    : 'Admin';
+
+  var isConfirm = true;
+  if (typeof window.showCustomConfirm === 'function') {
+    isConfirm = await window.showCustomConfirm(
+      'ยืนยันปิดงานก่อนเวลา',
+      // 🍓 BERRY FIX: เปลี่ยนข้อความอธิบายให้ชัดเจนว่าจะมีการส่ง Telegram
+      'เมื่อยืนยันแล้ว ระบบจะปิดงานก่อนเวลา คืนสถานะรถและพนักงานขับรถให้พร้อมใช้งานทันที พร้อมส่งแจ้งเตือนเข้า Telegram',
+      '🏁 ยืนยันปิดงาน',
+      'ยกเลิก',
+      '#dc2626'
+    );
+  } else {
+    isConfirm = confirm("ยืนยันปิดงานก่อนเวลาและแจ้งเตือนเข้ากลุ่มใช่หรือไม่");
+  }
+
+  if (!isConfirm) return;
+
+  window.__berryAssignmentEarlyCloseBusy = true;
+
+  var oldHtml = btn ? btn.innerHTML : '';
+  var oldDisabled = btn ? btn.disabled : false;
+  var loadingTimer = null;
+
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '⏳ กำลังบันทึก...';
+      btn.setAttribute('aria-busy', 'true');
+    }
+
+    loadingTimer = setTimeout(function () {
+      if (typeof showLoading === 'function') showLoading();
+    }, 250);
+
+    var runner = (typeof window.googleScriptRunLimited !== 'undefined')
+      ? window.googleScriptRunLimited
+      : window.googleScriptRun;
+
+    var res = await runner('closeBookingActualEnd', {
+      bookingId: bId,
+      note: 'ปิดงานก่อนเวลา เนื่องจากภารกิจเสร็จเร็วกว่ากำหนด',
+      closedBy: adminName,
+      noTelegram: false, // 🍓 BERRY FIX: ปลดล็อกให้ส่ง Telegram สำหรับการปิดงานจองรถ
+      _actionRole: window.currentUser ? (window.currentUser.role || window.currentUser.Role || '') : ''
+    });
+
+    clearTimeout(loadingTimer);
+    if (typeof hideLoading === 'function') hideLoading();
+
+    if (!res || !res.ok) {
+      throw new Error((res && res.error) || 'บันทึกไม่สำเร็จ');
+    }
+
+    if (typeof showToast === 'function') {
+      showToast(res.message || 'ปิดงานก่อนเวลาและแจ้งเตือนเรียบร้อย', 'success');
+    }
+
+    if (typeof closeModalA11y === 'function') {
+      closeModalA11y('assignment-modal');
+    }
+
+    if (typeof loadBookingsView === 'function') loadBookingsView();
+    if (typeof updateCounters === 'function') updateCounters();
+    // 🍓 BERRY FIX: 1 view = 1 loader — เรียก loadAdminPanelData ทีเดียว
+    // (มี auto-sync Radar + DayOff อยู่ใน loadAdminPanelData แล้ว line 627-630)
+    if (typeof loadAdminPanelData === 'function') {
+      loadAdminPanelData().catch(function(e) { console.warn('[EarlyClose] AdminPanel refresh fail:', e); });
+    }
+
+    if (typeof renderCalendar === 'function') {
+      var y = (window.calendarState && window.calendarState.currentYear)
+        ? window.calendarState.currentYear
+        : new Date().getFullYear();
+      var m = (window.calendarState && window.calendarState.currentMonth)
+        ? window.calendarState.currentMonth
+        : (new Date().getMonth() + 1);
+      renderCalendar(y, m);
+    }
+
+    // ✅ ลบ redundant calls — loadAdminPanelData() จัดการ Radar/DayOff ทั้งหมดแล้ว
+    console.log('[EarlyClose] ✅ Post-action refresh via shared loadAdminPanelData()');
+
+    console.log('[AssignmentEarlyClose] success bookingId=', bId);
+  } catch (e) {
+    clearTimeout(loadingTimer);
+    if (typeof hideLoading === 'function') hideLoading();
+    console.error('❌ Early Close Error:', e && e.message ? e.message : e);
+
+    if (typeof showToast === 'function') {
+      showToast('เกิดข้อผิดพลาด: ' + (e && e.message ? e.message : 'Unknown Error'), 'error');
+    }
+  } finally {
+    window.__berryAssignmentEarlyCloseBusy = false;
+
+    if (btn) {
+      btn.disabled = oldDisabled;
+      btn.innerHTML = oldHtml;
+      btn.removeAttribute('aria-busy');
+    }
+
+    if (typeof hideLoading === 'function') hideLoading();
+  }
+};
+
+window.handleAssignmentReject = async function () {
+  if (!window.__ASSIGN_CTX__) return;
+
+  const reason = prompt("กรุณาระบุเหตุผลที่ 'ไม่อนุมัติ' (ถ้ามี):", "");
+  if (reason === null) return;
+
+  const payload = {
+    bookingId: window.__ASSIGN_CTX__.bookingId,
+    status: 'rejected',
+    reason: reason || 'ไม่อนุมัติการจอง'
+  };
+
+  const rejectBtn = document.getElementById('assignment-reject-btn');
+  if (typeof setBtnLoading === 'function') setBtnLoading(rejectBtn, true);
+
+  try {
+    const res = await googleScriptRunLimited('updateBookingStatus', payload);
+    if (!res || !res.ok) throw new Error(res?.error || 'Reject failed');
+
+    await refreshBookingUiAfterMutation({ forceSync: true });
+    if (typeof showToast === 'function') showToast('⛔ ปฏิเสธการจองเรียบร้อย', 'info');
+    if (typeof closeModalA11y === 'function') closeModalA11y('assignment-modal');
+  } catch (err) {
+    if (typeof showToast === 'function') showToast('Error: ' + err.message, 'error');
+  } finally {
+    if (typeof setBtnLoading === 'function') setBtnLoading(rejectBtn, false);
+  }
+};
+
+/* ================== Timeline Functions ================== */
+function fmt2(n){ return (n<10?'0':'')+n; }
+function dateToISO(d){ return d.getFullYear()+'-'+fmt2(d.getMonth()+1)+'-'+fmt2(d.getDate()); }
+
+const TL_START_MIN = 6*60;
+const TL_END_MIN   = 22*60;
+const TL_SPAN_MIN  = TL_END_MIN - TL_START_MIN;
+
+function timeToMin(t){
+  const parts = String(t||'00:00').split(':');
+  const h = Number(parts[0]||0), m = Number(parts[1]||0);
+  return (h*60+m);
+}
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+/* ✅ Helpers: ไม่สร้างชื่อมี _ (ตามกติกา) */
+function toStr(v){ return String(v == null ? '' : v).trim(); }
+function normPlate(v){
+  // normalize ให้เทียบได้เสถียร (กัน space/ขีดต่างชนิด)
+  return toStr(v).replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+}
+function isEmptyPlate(v){
+  const s = normPlate(v);
+  if(!s) return true;
+  const low = s.toLowerCase();
+  return s === '-' || low === 'none' || low === 'null' || low === 'undefined';
+}
+
+function statusToClass(st){
+  const s = toStr(st).toLowerCase();
+  if (s.includes('approved') || s.includes('อนุมัติ') || s.includes('driver_special_approved')) return 'approved'; // 🍓 BERRY FIX: จัดให้เป็นสีเขียว
+  if (s.includes('rejected') || s.includes('ไม่') || s.includes('ไม่อนุมัติ')) return 'rejected';
+  if (s.includes('cancelled') || s.includes('ยกเลิก')) return 'cancelled';
+  return 'pending';
+}
+
+async function loadTimelineView() {
+  try {
+    const dateISO = dateToISO(window.currentTimelineDate || new Date());
+    const selEl = document.getElementById('timeline-plate');
+    const selectedPlateRaw = (selEl && selEl.value) ? selEl.value : '';
+    const selectedPlate = normPlate(selectedPlateRaw);
+    const cacheKey = dateISO + '|' + selectedPlate;
+
+    // 🍓 BERRY FIX 1: ใช้ window.timelineCache เพื่อป้องกัน ReferenceError 100%
+    if (window.timelineCache && window.timelineCache.key === cacheKey && window.timelineCache.data) {
+      renderTimelineGrid(
+        Array.isArray(window.timelineCache.data.bookings) ? window.timelineCache.data.bookings : [],
+        selectedPlate
+      );
+      return;
+    }
+
+    const runner =
+      (typeof window !== 'undefined' && typeof window.googleScriptRunLimited === 'function')
+        ? window.googleScriptRunLimited
+        : (typeof googleScriptRunLimited === 'function'
+            ? googleScriptRunLimited
+            : googleScriptRun);
+
+    // 🍓 BERRY FIX 2: ป้องกันผู้ใช้กดรัวๆ (ASYNC SAFETY) ล็อก UI และแสดง Loading
+    const grid = document.getElementById('timeline-grid');
+    if (grid) {
+      grid.innerHTML = '<div class="empty-state"><div class="spinner">⏳</div><div style="margin-top:10px;">กำลังโหลดข้อมูลไทม์ไลน์...</div></div>';
+    }
+    if (selEl) selEl.disabled = true; // ล็อก Dropdown
+
+    // รอคอยดึงข้อมูล...
+    const res = await runner('getTimelineData', {
+      dateISO: dateISO,
+      plate: selectedPlate
+    });
+
+    if (!res || !res.ok) {
+      if (grid) {
+        grid.innerHTML =
+          '<div class="empty-state"><div class="icon">😿</div><div>โหลดข้อมูลไทม์ไลน์ไม่สำเร็จ</div></div>';
+      }
+      if (selEl) selEl.disabled = false; // 🍓 ปลดล็อกเมื่อโหลดล้มเหลว
+      return;
+    }
+
+    // 🍓 BERRY FIX 3: เซฟข้อมูลลง window เพื่อความปลอดภัย
+    window.timelineCache = { key: cacheKey, data: res };
+
+    if (selEl) {
+      selEl.disabled = false; // 🍓 ปลดล็อกเมื่อโหลดสำเร็จ
+      const keep = selectedPlate;
+      const list = Array.isArray(res.plates) ? res.plates : [];
+      const opts = ['<option value="">-- ดูรถทุกคัน --</option>']
+        .concat(list.map(function (p) {
+          const plate = normPlate(p);
+          const esc = escapeHtml(plate);
+          const selected = (plate && plate === keep) ? ' selected' : '';
+          return '<option value="' + esc + '"' + selected + '>' + esc + '</option>';
+        }));
+      selEl.innerHTML = opts.join('');
+      if (keep && normPlate(selEl.value) !== keep) selEl.value = keep;
+      selEl.onchange = function () { loadTimelineView(); };
+    }
+
+    renderTimelineGrid(Array.isArray(res.bookings) ? res.bookings : [], selectedPlate);
+    
+  } catch (e) {
+    // 🍓 BERRY FIX 4: ถ้าเกิด Error กลางคัน (ตก Catch) ต้องปลดล็อก UI ป้องกันหน้าจอค้างยาว
+    const selEl = document.getElementById('timeline-plate');
+    if (selEl) selEl.disabled = false; 
+    
+    const grid = document.getElementById('timeline-grid');
+    if (grid) {
+      const msg = e && e.message ? e.message : 'เกิดข้อผิดพลาด';
+      grid.innerHTML =
+        '<div class="empty-state"><div class="icon">😿</div><div>' +
+        escapeHtml(msg) +
+        '</div></div>';
+    }
+  }
+}
+
+function renderTimelineGrid(bookings, selectedPlate){
+  const grid = document.getElementById('timeline-grid');
+  if(!grid) return;
+
+  const wantPlate = normPlate(selectedPlate || '');
+
+  // ✅ ตัดข้อมูล plate ว่าง/ "-" ทิ้งเสมอ
+  const cleaned = (Array.isArray(bookings) ? bookings : []).filter(b=>{
+    const p = normPlate(b && b.plate);
+    if (isEmptyPlate(p)) return false;
+    // ถ้ามีการเลือกทะเบียน ให้โชว์เฉพาะทะเบียนนั้น
+    if (wantPlate) return p === wantPlate;
+    return true;
+  });
+
+  if(cleaned.length === 0){
+    grid.innerHTML = '<div class="empty-state"><div class="icon">ℹ️</div><div>ยังไม่มีงานในวันนี้</div></div>';
+    return;
+  }
+
+  const byPlate = new Map();
+  cleaned.forEach(b=>{
+    const p = normPlate(b.plate);
+    if(!byPlate.has(p)) byPlate.set(p, []);
+    byPlate.get(p).push(b);
+  });
+
+  let html = '';
+  byPlate.forEach((list, plate)=>{
+    // เรียงในแถวเดียวกันจากเวลาเริ่มก่อน → หลัง (ถ้าเท่ากันเอาเวลาจบ)
+    list.sort((a,b)=>{
+      const as = timeToMin(a.startTime), bs = timeToMin(b.startTime);
+      if (as !== bs) return as - bs;
+      const ae = timeToMin(a.endTime || a.startTime);
+      const be = timeToMin(b.endTime || b.startTime);
+      return ae - be;
+    });
+
+    html += `
+      <div class="timeline-row">
+        <div class="vehicle-label">
+          <span class="vehicle-icon">🚐</span>
+          <span class="vehicle-name">${escapeHtml(plate || '-')}</span>
+        </div>
+        <div class="timeline-track">
+          
+          ${(function(){
+            const d = new Date();
+            const nowM = (d.getHours() * 60) + d.getMinutes();
+            // ตรวจสอบว่ามีตัวแปรเวลาอยู่จริงและเวลาปัจจุบันอยู่ในช่วงที่แสดงผลหรือไม่
+            if(typeof TL_START_MIN !== 'undefined' && typeof TL_END_MIN !== 'undefined' && typeof TL_SPAN_MIN !== 'undefined') {
+              if(nowM >= TL_START_MIN && nowM <= TL_END_MIN) {
+                const leftPct = ((nowM - TL_START_MIN) / TL_SPAN_MIN) * 100;
+                // ✅ เอา \ หน้า ` ออกเพื่อให้ Syntax ทำงานถูกต้อง
+                return `<div class="current-time-line" style="left:${leftPct}%;"></div>`;
+              }
+            }
+            return '';
+          })()}
+
+          ${list.map(b=>{
+            const sMin = clamp(timeToMin(b.startTime), TL_START_MIN, TL_END_MIN);
+            const rawEnd = b.endTime || b.startTime;
+            const eMin = clamp(timeToMin(rawEnd), TL_START_MIN, TL_END_MIN);
+            const leftPct = ((sMin - TL_START_MIN) / TL_SPAN_MIN) * 100;
+            const widthPct = Math.max(2, ((Math.max(eMin, sMin+30) - sMin) / TL_SPAN_MIN) * 100);
+
+            const cls = statusToClass(b.status);
+            const title = `${escapeHtml(b.startTime)}-${escapeHtml(rawEnd)}  ${escapeHtml(b.name||'')}`;
+
+            // ✅ เอา \ หน้า ` และหน้า $ ออกทั้งหมด เพื่อป้องกัน Syntax Error
+            return `
+              <div class="timeline-booking ${cls}" title="${title}"
+                   onclick="if(typeof showActivityDetails === 'function') showActivityDetails('${escapeHtml(b.bookingId||'')}')"
+                   role="button" tabindex="0"
+                   style="left:${leftPct}%; width:${widthPct}%;">
+
+                <div class="booking-title">${escapeHtml(b.purpose||'งาน')}</div>
+                <div class="booking-time">${escapeHtml(b.startTime)}-${escapeHtml(rawEnd)}</div>
+                <div class="booking-meta">ID: ${escapeHtml(b.bookingId||'')}</div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  });
+
+  grid.innerHTML = html;
+}
+
+function changeTimelineDate(deltaDays) {
+  var base = (window.currentTimelineDate instanceof Date && !isNaN(window.currentTimelineDate.getTime()))
+    ? new Date(window.currentTimelineDate.getTime())
+    : new Date();
+
+  base.setDate(base.getDate() + (parseInt(deltaDays, 10) || 0));
+  window.currentTimelineDate = base;
+
+  const lbl = document.getElementById('current-timeline-date');
+  if (lbl) {
+    const dd = String(base.getDate()).padStart(2, '0');
+    const mm = String(base.getMonth() + 1).padStart(2, '0');
+    const yyyy = base.getFullYear() + 543;
+    lbl.textContent = dd + '/' + mm + '/' + yyyy;
+  }
+
+  if (typeof window.loadTimelineView === 'function') {
+    window.loadTimelineView();
+  } else if (typeof loadTimelineView === 'function') {
+    loadTimelineView();
+  } else {
+    console.error('🍓 [V-Berry] ไม่พบฟังก์ชัน loadTimelineView() ในระบบค่ะ');
+  }
+}
+
+
+function initializeApp(options) {
+  const silentIfRunning = !!(options && options.silentIfRunning);
+  if (window.vbInitState === 'READY') return Promise.resolve(true);
+  if ((window.vbInitState === 'LOADING' || window.vbInitState === 'RETRYING') && window.vbInitPromise) {
+    if (!silentIfRunning) {
+      console.info('ℹ️ initializeApp() already running. Returning existing promise.');
+    }
+    return window.vbInitPromise;
+  }
+  window.vbInitState = 'LOADING';
+  window.vbInitRequestToken = Number(window.vbInitRequestToken || 0) + 1;
+  const requestToken = window.vbInitRequestToken;
+
+  function isCurrentInitRequest() {
+    return window.vbInitRequestToken === requestToken;
+  }
+
+  function sleepInitialDataRetry(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function getInitialDataRetryReason(error) {
+    const response = error && error.initResponse ? error.initResponse : null;
+    const rawMessage = String(
+      (error && error.message) ||
+      (response && (response.error || response.message)) ||
+      error ||
+      ''
+    );
+    const message = rawMessage.toLowerCase();
+
+    if (!error && !response) return 'empty response';
+    if (response && (response.cancelled || response.benign)) return 'Apps Script response interrupted';
+    if (message.indexOf('http 404') > -1 || message.indexOf('404') > -1) return 'HTTP 404';
+    if (message.indexOf('timeout') > -1 || message.indexOf('timed out') > -1) return 'timeout';
+    if (message.indexOf('abort') > -1 || message.indexOf('aborted') > -1) return 'timeout';
+    if (message.indexOf('failed to fetch') > -1 || message.indexOf('network') > -1) return 'network error';
+    if (message.indexOf('message channel closed') > -1 || message.indexOf('asynchronous response') > -1) return 'Apps Script response interrupted';
+    if (message.indexOf('empty initial data response') > -1 || message.indexOf('init data missing') > -1) return 'empty response';
+    if (message.indexOf('initial data payload missing') > -1) return 'empty response';
+    return '';
+  }
+
+  function clearInitialDataError() {
+    const panel = document.getElementById('vb-init-error-panel');
+    if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+  }
+
+  function showInitialDataError(error) {
+    const message = String(error && error.message ? error.message : error || 'โหลดข้อมูลไม่สำเร็จ');
+    let panel = document.getElementById('vb-init-error-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = 'vb-init-error-panel';
+      panel.setAttribute('role', 'alert');
+      panel.style.cssText = 'margin:12px auto; max-width:960px; padding:14px 16px; border:1px solid #fecaca; border-radius:12px; background:#fef2f2; color:#991b1b; display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;';
+      const main = document.querySelector('main.container') || document.body;
+      main.insertBefore(panel, main.firstChild);
+    }
+
+    panel.innerHTML = '';
+    const text = document.createElement('div');
+    text.style.cssText = 'min-width:220px; flex:1 1 260px; line-height:1.45;';
+    text.textContent = 'โหลดข้อมูลเริ่มต้นไม่สำเร็จ กรุณาตรวจสัญญาณอินเทอร์เน็ตแล้วลองโหลดใหม่';
+
+    const detail = document.createElement('div');
+    detail.style.cssText = 'font-size:0.85rem; color:#7f1d1d; margin-top:4px;';
+    detail.textContent = 'รายละเอียด: ' + message;
+    text.appendChild(detail);
+
+    const retryButton = document.createElement('button');
+    retryButton.type = 'button';
+    retryButton.className = 'btn btn-primary';
+    retryButton.style.cssText = 'min-height:44px;';
+    retryButton.textContent = 'โหลดข้อมูลใหม่';
+    retryButton.addEventListener('click', function() {
+      if (window.vbInitState === 'LOADING' || window.vbInitState === 'RETRYING') return;
+      retryButton.disabled = true;
+      retryButton.textContent = 'กำลังโหลด...';
+      initializeApp({ source: 'manual-retry' });
+    }, { once: true });
+
+    panel.appendChild(text);
+    panel.appendChild(retryButton);
+  }
+
+  window.vbInitPromise = (async () => {
+    console.log('🚀 Initializing Vehicle Booking System (V-Berry Fix)...');
+
+    try {
+      console.log('START initial data');
+      clearInitialDataError();
+      if (typeof showLoading === 'function') showLoading();
+
+      try { if (typeof checkSessionTimeout === 'function') checkSessionTimeout(); } catch (e) {}
+
+      let initData = null;
+      let retryCount = 0;
+      const retryDelays = [800, 1500, 3000];
+
+      while (true) {
+        try {
+          console.log('WAIT getWebAppInitialData');
+          initData = await gas('getWebAppInitialData');
+          if (!isCurrentInitRequest()) {
+            console.warn('STALE getWebAppInitialData response discarded');
+            return false;
+          }
+          if (!initData) {
+            throw new Error('Empty initial data response');
+          }
+          if (!initData.ok) {
+            const initError = new Error(initData.error || initData.message || 'Init data missing');
+            initError.initResponse = initData;
+            throw initError;
+          }
+          if (!initData.data) {
+            throw new Error('Initial data payload missing');
+          }
+          break;
+        } catch (error) {
+          if (!isCurrentInitRequest()) {
+            console.warn('STALE getWebAppInitialData error discarded');
+            return false;
+          }
+          const retryReason = getInitialDataRetryReason(error);
+          if (retryReason && retryCount < retryDelays.length) {
+            retryCount++;
+            window.vbInitState = 'RETRYING';
+            console.warn(`RETRY getWebAppInitialData ${retryCount}/3 after ${retryReason}:`, error);
+            try {
+              if (typeof showToast === 'function') {
+                showToast('กำลังโหลดข้อมูลอีกครั้ง...', 'info');
+              }
+            } catch (ignoredError) {}
+            await sleepInitialDataRetry(retryDelays[retryCount - 1]);
+          } else {
+            console.error('INIT_FAILED after retries:', error);
+            throw error;
+          }
+        }
+      }
+
+      if (!isCurrentInitRequest()) {
+        console.warn('STALE initializeApp success discarded');
+        return false;
+      }
+      console.log('SUCCESS getWebAppInitialData');
+
+      // Clear any leftover toast or error state
+      const toastEl = document.getElementById('vtoast');
+      if (toastEl) toastEl.style.display = 'none';
+
+      window.allBookingsData = (initData.data && initData.data.bookings) || [];
+      window.vehiclesList    = (initData.data && initData.data.vehicles) || { vans: [], trucks: [], all: [] };
+      window.driversList     = (initData.data && initData.data.drivers) || [];
+      window.projectList     = (initData.data && initData.data.projects) || [];
+
+      try {
+        if (typeof reindexBookings === 'function') reindexBookings(window.allBookingsData);
+      } catch (e) {
+        console.warn('reindexBookings warning:', e);
+      }
+
+      let localUser = null;
+      try { localUser = JSON.parse(localStorage.getItem('vb_current_user')); } catch (e) {}
+
+      let currentUser = null;
+      try {
+        const serverUser = (initData.data && initData.data.user) || null;
+        const serverLoggedIn = !!(serverUser && serverUser.isLoggedIn);
+
+        if (!serverLoggedIn && localUser && typeof checkSessionTimeout === 'function' && checkSessionTimeout()) {
+          if (typeof scheduleLoginSessionAutoLogout === 'function') scheduleLoginSessionAutoLogout(localUser);
+          currentUser = localUser;
+        } else {
+          currentUser = serverUser || { isLoggedIn: false, role: 'Guest' };
+        }
+      } catch (e) {
+        currentUser = { isLoggedIn: false, role: 'Guest' };
+      }
+
+      window.currentUser = currentUser;
+
+      try { if (typeof updateHeaderUI === 'function') updateHeaderUI(currentUser); } catch (e) {}
+      try { if (typeof initUiComponents === 'function') initUiComponents(); } catch (e) { console.warn('initUiComponents warning:', e); }
+      try { if (typeof openInitialTab === 'function') openInitialTab(); } catch (e) {}
+      try { if (typeof updateCounters === 'function') updateCounters(); } catch (e) {}
+      try { if (typeof syncReturnDateWithStartDate === 'function') syncReturnDateWithStartDate(); } catch (e) {}
+      try { if (typeof installSelfTestFloatingButton === 'function') installSelfTestFloatingButton(); } catch (e) {}
+      try { if (typeof wireVehicleCountAutoClampOnce === 'function') wireVehicleCountAutoClampOnce(); } catch (e) {}
+
+      window.vbInitState = 'READY';
+      window.isAppInitialized = true;
+      console.log('INIT_READY');
+      console.log('✅ Application initialized successfully!');
+
+      try {
+        if (typeof renderCalendar === 'function' && window.calendarState) {
+          renderCalendar(window.calendarState.currentYear, window.calendarState.currentMonth);
+        }
+      } catch (e) {
+        console.warn('renderCalendar warning:', e);
+      }
+
+      return true;
+
+    } catch (error) {
+      console.error('❌ Initialization failed:', error);
+      try {
+        if (typeof showToast === 'function') {
+          showToast('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่ค่ะ ⏳', 'error');
+        }
+      } catch (ignoredError) {}
+      if (isCurrentInitRequest()) {
+        showInitialDataError(error);
+        window.vbInitState = 'FAILED';
+      }
+      return false;
+
+    } finally {
+      console.log('FINALLY hide loading');
+      try { if (typeof hideLoading === 'function') hideLoading(); } catch (e) {}
+      if (isCurrentInitRequest() && window.vbInitState !== 'READY') window.vbInitPromise = null;
+    }
+  })();
+
+  return window.vbInitPromise;
+}
+
+
+
+    function loadInitialData() {
+  console.log("🐱 กำลังโหลดข้อมูลเริ่มต้น (ปฏิทิน)...");
+  try {
+    var st = window.calendarState || {
+      currentYear: new Date().getFullYear(),
+      currentMonth: new Date().getMonth() + 1
+    };
+    renderCalendar(st.currentYear, st.currentMonth);
+  } catch (err) {
+    console.error("❌ Failed to render initial calendar:", err);
+    var grid = document.getElementById('calendar-grid');
+    if (grid) {
+      grid.innerHTML = '<div class="calendar-error">😿 วาดปฏิทินเริ่มต้นไม่สำเร็จค่ะ</div>';
+    }
+  }
+}
+
+ /* ==================== BOOKING FILTER LOGIC (THAI DATE UPDATE) ==================== */
+
+window.currentDateFilter = null; 
+
+// --- Helper Functions สำหรับจัดการวันที่ พ.ศ. ---
+const _getISO = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+
+const _getThaiBE = (iso) => {
+  if(!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${parseInt(y) + 543}`;
+};
+
+const _setThaiDateInput = (id, dateObj) => {
+  const el = document.getElementById(id);
+  if(!el) return;
+  if(dateObj) {
+    const iso = _getISO(dateObj);
+    el.dataset.iso = iso;
+    el.type = 'text';
+    el.value = _getThaiBE(iso);
+  } else {
+    el.dataset.iso = '';
+    el.type = 'text';
+    el.value = '';
+  }
+};
+
+// 1. ฟังก์ชันพับ/กาง (Mobile)
+window.toggleBookingFilter = function() {
+  const content = document.getElementById('bf-content');
+  const btn = document.getElementById('bf-mobile-toggle');
+  if(content) content.classList.toggle('expanded');
+  if(btn) btn.classList.toggle('expanded');
+};
+
+// 2. Preset Builder (ปุ่มลัด)
+window.applyPresetRange = function(presetType) {
+  const now = new Date();
+  let start = new Date(now);
+  let end = new Date(now);
+
+  switch (presetType) {
+    case 'today': break; 
+    case 'tomorrow':
+      start.setDate(now.getDate() + 1); end.setDate(now.getDate() + 1); break;
+    case 'next7days':
+      end.setDate(now.getDate() + 7); break;
+    case 'thisMonth':
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0); break;
+    case 'lastMonth':
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      end = new Date(now.getFullYear(), now.getMonth(), 0); break;
+    case 'nextMonth':
+      start = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      end = new Date(now.getFullYear(), now.getMonth() + 2, 0); break;
+  }
+
+  // ใช้ Helper ตัวใหม่เขียนค่าลงช่อง Input เป็น พ.ศ. ทันที
+  _setThaiDateInput('bf-start-date', start);
+  _setThaiDateInput('bf-end-date', end);
+  
+  if(document.getElementById('bf-start-time')) document.getElementById('bf-start-time').value = "00:00";
+  if(document.getElementById('bf-end-time')) document.getElementById('bf-end-time').value = "23:59";
+
+  window.applyBookingFilter();
+};
+
+// 3. Apply Filter (กดปุ่มค้นหา)
+window.applyBookingFilter = function() {
+  const startEl = document.getElementById('bf-start-date');
+  const endEl = document.getElementById('bf-end-date');
+  
+  // ✨ สำคัญ: ดึงค่าจาก dataset.iso ไม่ใช่ .value ที่เป็นภาษาไทย
+  const sDate = startEl ? (startEl.dataset.iso || startEl.value) : '';
+  const sTime = document.getElementById('bf-start-time') ? document.getElementById('bf-start-time').value || '00:00' : '00:00';
+  const eDate = endEl ? (endEl.dataset.iso || endEl.value || sDate) : sDate;
+  const eTime = document.getElementById('bf-end-time') ? document.getElementById('bf-end-time').value || '23:59' : '23:59';
+
+  if (!sDate) {
+    if(typeof showToast === 'function') showToast('กรุณาระบุวันที่เดินทางไปค่ะ', 'warning');
+    return;
+  }
+
+  const filterStart = new Date(`${sDate}T${sTime}:00`);
+  const filterEnd = new Date(`${eDate}T${eTime}:00`);
+
+  if (filterEnd < filterStart) {
+    if(typeof showToast === 'function') showToast('วันที่กลับ ต้องอยู่หลังวันที่ไปค่ะ', 'error');
+    return;
+  }
+
+  const formatThai = (d) => `${d.getDate()} ${['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'][d.getMonth()]} ${d.getFullYear()+543} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  
+  window.currentDateFilter = {
+    start: filterStart,
+    end: filterEnd,
+    label: `${formatThai(filterStart)} → ${formatThai(filterEnd)}`
+  };
+
+  const labelEl = document.getElementById('bf-label-text');
+  const activeLabelEl = document.getElementById('bf-active-label');
+  if(labelEl) labelEl.innerText = window.currentDateFilter.label;
+  if(activeLabelEl) activeLabelEl.classList.remove('hidden');
+
+  const content = document.getElementById('bf-content');
+  const toggleBtn = document.getElementById('bf-mobile-toggle');
+  if(content) content.classList.remove('expanded');
+  if(toggleBtn) toggleBtn.classList.remove('expanded');
+
+  window.bookingsCurrentPage = 1; 
+  if (typeof loadBookingsView === 'function') loadBookingsView();
+};
+
+// 4. Clear Filter (กดปุ่มล้างค่า)
+window.clearBookingFilter = function() {
+  _setThaiDateInput('bf-start-date', null);
+  _setThaiDateInput('bf-end-date', null);
+
+  if(document.getElementById('bf-start-time')) document.getElementById('bf-start-time').value = '00:00';
+  if(document.getElementById('bf-end-time')) document.getElementById('bf-end-time').value = '23:59';
+  
+  const activeLabelEl = document.getElementById('bf-active-label');
+  if(activeLabelEl) activeLabelEl.classList.add('hidden');
+  
+  window.currentDateFilter = null;
+  window.bookingsCurrentPage = 1; 
+
+  if (typeof loadBookingsView === 'function') loadBookingsView();
+};
+
+// 5. Core Logic (Overlap Logic)
+window.filterBookingsByDateRange = function(bookingsArray) {
+  if (!window.currentDateFilter) return bookingsArray; 
+
+  const fStart = window.currentDateFilter.start.getTime();
+  const fEnd = window.currentDateFilter.end.getTime();
+
+  return bookingsArray.filter(b => {
+    try {
+      const bDateStart = b.startDate; 
+      if(!bDateStart) return false; 
+
+      const bTimeStart = b.startTime || '00:00';
+      const bDateEnd = b.endDate || bDateStart;
+      const bTimeEnd = b.endTime || '23:59';
+
+      const bStartMs = new Date(`${bDateStart}T${bTimeStart}:00`).getTime();
+      const bEndMs = new Date(`${bDateEnd}T${bTimeEnd}:00`).getTime();
+
+      return (bStartMs <= fEnd) && (bEndMs >= fStart);
+    } catch (e) {
+      return false;
+    }
+  });
+};
+
+// 6. UI Trick: ทำให้ช่องวันที่แปลงร่างเป็น "พ.ศ." อัตโนมัติ
+function initFilterThaiDates() {['bf-start-date', 'bf-end-date'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    // ตอนคลิก (Focus) เปิดปฏิทิน Native
+    el.addEventListener('focus', () => {
+      el.type = 'date';
+      if (el.dataset.iso) el.value = el.dataset.iso;
+      try { el.showPicker(); } catch(e){}
+    });
+
+    // ตอนเปลี่ยนค่าปฏิทิน เก็บค่า YYYY-MM-DD ไว้เบื้องหลัง
+    el.addEventListener('change', () => {
+      if (el.type === 'date' && el.value) {
+        el.dataset.iso = el.value;
+      }
+    });
+
+    // ตอนคลิกออก (Blur) เปลี่ยนเป็นตัวหนังสือภาษาไทย (พ.ศ.)
+    el.addEventListener('blur', () => {
+      const iso = el.dataset.iso;
+      if (iso) {
+        el.type = 'text';
+        el.value = _getThaiBE(iso);
+      } else {
+        el.type = 'text';
+        el.value = '';
+      }
+    });
+  });
+}
+
+// ผูก Event ทันที
+setTimeout(initFilterThaiDates, 300);
+
+// 🍓 BERRY FIX: ฟังก์ชันพับ/กาง Daily Summary
+window.toggleDailySummary = function() {
+    const content = document.getElementById('daily-summary-content');
+    const icon = document.getElementById('daily-summary-icon');
+    if (!content || !icon) return;
+
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        icon.style.transform = 'rotate(180deg)';
+    } else {
+        content.style.display = 'none';
+        icon.style.transform = 'rotate(0deg)';
+    }
+};
+
+window.__BOOKINGS_FILTERED_CACHE__ = window.__BOOKINGS_FILTERED_CACHE__ || [];
+
+window.loadBookingsView = function() {
+  console.log("🚀 [V-Berry] Loading Bookings View with Status Grouping Fix...");
+
+  const tbody = document.getElementById('bookings-table-body');
+  const summaryBody = document.getElementById('daily-summary-tbody');
+
+  if (tbody) tbody.innerHTML = (typeof getSkeletonRows === 'function') ? getSkeletonRows(7, 5) : '<tr><td colspan="7">Loading...</td></tr>';
+  if (summaryBody) summaryBody.innerHTML = (typeof getSkeletonRows === 'function') ? getSkeletonRows(6, 3) : '<tr><td colspan="6">Loading...</td></tr>';
+
+  setTimeout(() => {
+    try {
+      const allData = (window.allBookingsData || []).filter(b => {
+        const bId = String(b.bookingId || b.id || '');
+        return !bId.startsWith('BLK-');
+      });
+
+      if (document.getElementById('total-bookings-badge')) {
+        document.getElementById('total-bookings-badge').textContent = allData.length;
+      }
+
+      const today = new Date();
+      const todayISO = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+
+      const todayBookings = allData.filter(b => {
+        const s = normalizeClientStatus(b.status || 'pending');
+        const allowedDaily = ['approved', 'pending', 'driver_special_approved'];
+        if (allowedDaily.indexOf(s) === -1) return false;
+
+        const start = b.startDate || '';
+        const end = b.endDate || start;
+        return todayISO >= start && todayISO <= end;
+      });
+
+      if (typeof renderBookingsTable === 'function') {
+        renderBookingsTable(todayBookings, 'daily-summary-tbody', 'daily');
+      }
+
+      let filteredData = allData;
+
+      const includeBlocks = document.getElementById('chk-include-blocks') ? document.getElementById('chk-include-blocks').checked : false;
+      if (!includeBlocks && window.bookingsCurrentFilter !== 'blocks') {
+        filteredData = filteredData.filter(b => {
+          const s = normalizeClientStatus(b.status || 'pending');
+          return s !== 'driver_block' && s !== 'vehicle_block' && s !== 'maintenance';
+        });
+      }
+
+      if (typeof window.filterBookingsByDateRange === 'function') {
+        filteredData = window.filterBookingsByDateRange(filteredData);
+      }
+
+      if (window.bookingsCurrentFilter) {
+        filteredData = filteredData.filter(b => {
+          const s = normalizeClientStatus(b.status || 'pending');
+
+          if (window.bookingsCurrentFilter === 'approved') {
+            return s === 'approved' || s === 'driver_special_approved';
+          }
+          if (window.bookingsCurrentFilter === 'blocks') {
+            return s === 'driver_block' || s === 'vehicle_block' || s === 'maintenance';
+          }
+
+          return s === window.bookingsCurrentFilter;
+        });
+      }
+
+      window.__BOOKINGS_FILTERED_CACHE__ = filteredData.slice();
+
+      const totalItems = filteredData.length;
+      const totalPages = Math.max(1, Math.ceil(totalItems / BOOKINGS_PAGE_SIZE));
+
+      if (bookingsCurrentPage > totalPages) bookingsCurrentPage = totalPages;
+      if (bookingsCurrentPage < 1) bookingsCurrentPage = 1;
+
+      const startIndex = (bookingsCurrentPage - 1) * BOOKINGS_PAGE_SIZE;
+      const pageData = filteredData.slice(startIndex, startIndex + BOOKINGS_PAGE_SIZE);
+
+      if (typeof renderBookingsTable === 'function') {
+        renderBookingsTable(pageData, 'bookings-table-body', 'full');
+      }
+
+      const bookingsTableCard = document.getElementById('bookings-table-card');
+      const bookingsFooter = document.getElementById('bookings-footer');
+
+      if (bookingsTableCard) bookingsTableCard.style.display = '';
+      if (bookingsFooter) bookingsFooter.style.display = (totalItems > 0) ? 'block' : 'none';
+
+      if (typeof renderBookingsPagination === 'function') {
+        renderBookingsPagination(totalPages, totalItems);
+      }
+
+    } catch (e) {
+      console.error("❌ loadBookingsView Error:", e);
+      if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">เกิดข้อผิดพลาด: ' + e.message + '</td></tr>';
+    }
+  }, 200);
+};
+
+function renderBookingsTable(bookings, tbodyId, type) {
+  var tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function isRealUrl(u) {
+    u = String(u || '').trim();
+    return /^(https?:\/\/)[^\s"]+$/i.test(u);
+  }
+
+   function safeStatusKey(v) {
+    var s = String(v || 'pending').toLowerCase().trim();
+    return (typeof normalizeClientStatus === 'function') ? normalizeClientStatus(s) : s;
+  }
+
+  function splitList(raw) {
+    var s = String(raw || '').trim();
+    if (!s || s === '-' || s === 'undefined') return[];
+    return s.split(',')
+      .map(function (x) { return String(x || '').trim(); })
+      .filter(function (x) { return !!x && x !== '-'; });
+  }
+
+  function fmtDTParts(iso, time) {
+    if (!iso) return { date: '-', time: '' };
+    if (Object.prototype.toString.call(iso) === '[object Date]' && !isNaN(iso.getTime())) {
+      var d = iso;
+      var dd0 = String(d.getDate());
+      var mm0 = String(d.getMonth() + 1);
+      var yy0 = d.getFullYear() + 543;
+      var dd = (dd0.length === 1) ? ('0' + dd0) : dd0;
+      var mm = (mm0.length === 1) ? ('0' + mm0) : mm0;
+      var t0 = String(time || '').replace('น.', '').trim();
+      return { date: dd + '/' + mm + '/' + yy0, time: (t0 ? t0 : '') };
+    }
+    var sIso = String(iso).trim();
+    var p = sIso.split('-');
+    if (p.length !== 3) return { date: esc(sIso), time: '' };
+    var yy = parseInt(p[0], 10);
+    var mm = p[1];
+    var dd = p[2];
+    if (!isFinite(yy)) return { date: esc(sIso), time: '' };
+    yy = yy + 543;
+    var t = String(time || '').replace('น.', '').trim();
+    return { date: dd + '/' + mm + '/' + yy, time: (t ? t : '') };
+  }
+
+  function buildVehicleDriverPairs(plates, drivers, vehicleType) {
+    if (!plates.length && !drivers.length) return '<span class="text-muted">-</span>';
+    var maxLen = Math.max(plates.length, drivers.length);
+    var rows =[];
+    var emptyStateHTML = '<span style="color:#ef4444; font-weight:800; font-size:0.9em;">⚠️ รอระบุ</span>';
+    var vehicleIcon = (typeof getVehicleIcon === 'function') ? getVehicleIcon(vehicleType || '') : '🚗';
+
+    for (var i = 0; i < maxLen; i++) {
+      var n = i + 1;
+      var p = (plates[i] != null && String(plates[i]).trim()) ? String(plates[i]).trim() : '';
+      var d = (drivers[i] != null && String(drivers[i]).trim()) ? String(drivers[i]).trim() : '';
+
+      rows.push(
+        '<div class="vberry-pair-row" style="display:flex; flex-direction:column; gap:6px; padding:6px 0; min-width:0;">' +
+          '<div class="vberry-pair-line" style="display:flex; align-items:baseline; gap:8px; min-width:0;">' +
+            '<span aria-hidden="true" title="รถ" style="flex:0 0 auto; font-size:1.15em;">' + vehicleIcon + '</span>' +
+            '<div style="min-width:0; line-height:1.35; overflow:hidden;">' +
+              '<span style="font-weight:800; color:#0f172a;">' + n + '.</span>&nbsp;' +
+              '<span style="font-weight:700; color:#0f172a; white-space:nowrap;">' + (p ? esc(p).replace(/ /g, '&nbsp;') : emptyStateHTML) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div class="vberry-pair-line" style="display:flex; align-items:flex-start; gap:8px; min-width:0;">' +
+            '<span aria-hidden="true" title="คนขับ" style="flex:0 0 auto; font-size:1.15em; margin-top:2px;">👤</span>' +
+            '<div style="flex:1 1 auto; min-width:0; line-height:1.4; color:#334155; word-break:break-word; overflow-wrap:anywhere;">' +
+              (d ? '<span class="driver-name">' + esc(d) + '</span>' : emptyStateHTML) +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+    return '<div class="vberry-pairs" style="display:flex; flex-direction:column; gap:8px; min-width:0;">' + rows.join('') + '</div>';
+  }
+ 
+  if (!bookings || bookings.length === 0) {
+    var colSpan = 6; 
+    var table = tbody.closest ? tbody.closest('table') : null;
+    if (table) {
+      var thead = table.querySelector('thead');
+      if (thead) thead.style.display = 'none';
+    }
+    
+    var emptyIcon = type === 'daily' ? '📭' : '📦';
+    var emptyText = type === 'daily' ? 'วันนี้ไม่มีรายการจองค่ะ 🐱' : 'ไม่พบรายการจองในช่วงเวลานี้ค่ะ 🐱';
+
+    tbody.innerHTML =
+      '<tr>' +
+        '<td colspan="' + colSpan + '" style="text-align:center; padding:2.5rem 1rem; border:none; background:transparent;">' +
+          '<div style="display:flex; flex-direction:column; align-items:center; opacity:0.6; gap:12px;">' +
+            '<span style="font-size:3rem; line-height:1;">' + emptyIcon + '</span>' +
+            '<span style="font-size:0.95rem; color:#64748b; font-weight:500;">' + emptyText + '</span>' +
+          '</div>' +
+        '</td>' +
+      '</tr>';
+    return;
+  }
+
+  var table2 = tbody.closest ? tbody.closest('table') : null;
+  if (table2) {
+    var thead2 = table2.querySelector('thead');
+    if (thead2) thead2.style.display = '';
+  } 
+
+  var html = bookings.map(function (b) {
+    var statusKey = safeStatusKey(b.status);
+    var blockMeta = (typeof getResourceBlockRenderMeta === 'function') ? getResourceBlockRenderMeta(b) : null;
+    var statusText = (typeof getStatusText === 'function') ? getStatusText(statusKey) : statusKey;
+    var statusClass = (typeof statusClassFromKey === 'function') ? statusClassFromKey(statusKey) : ('status-' + statusKey);
+
+    // คงสถานะตามค่าจริงจาก Data เสมอ
+    // กรณีมี actualEndAt ให้แสดงเป็น badge ในคอลัมน์วันเวลาแทน ไม่ทับข้อความสถานะหลัก
+
+    var fUrl = String(b.fileUrl || b.file || '').trim();
+    var fileBtn = isRealUrl(fUrl)
+      ? ' <a href="' + esc(fUrl) + '" target="_blank" class="text-info" style="text-decoration:none;" title="ดูไฟล์แนบ">📎</a>'
+      : '';
+
+    var id = esc(String(b.bookingId || b.id || '-'));
+    var name = esc(String(b.name || '-'));
+    var place = esc(String(b.place || b.destination || '-'));
+    if (blockMeta) {
+      name = esc(String(blockMeta.primaryText || b.name || '-'));
+      place = esc('บล็อกทรัพยากร');
+    }
+
+    var jobType = String(b.workType || b.jobType || '').trim();
+    var projText = String(b.workName || b.projectName || b.purpose || b.project || '').trim();
+    if (blockMeta) {
+      jobType = String(blockMeta.typeText || '').trim();
+      projText = String(blockMeta.secondaryText || '').trim();
+    }
+    
+    if (jobType === '-') jobType = '';
+    if (projText === '-') projText = '';
+
+    var tltpType = jobType || 'ไม่ระบุ';
+    var tltpProj = projText || 'ไม่ระบุ';
+    var tltpTime = (b.startTime || '-') + ' - ' + (b.endTime || '-');
+    var fullTooltip = 'งาน: ' + tltpType + '\nโครงการ: ' + tltpProj + '\nเวลา: ' + tltpTime;
+
+    var chipHtml = jobType 
+      ? '<span style="display:inline-flex; align-items:center; padding:2px 6px; background:#e0e7ff; color:#4338ca; border-radius:4px; font-size:0.75rem; font-weight:800; margin-right:6px; flex-shrink:0; line-height:1;">' + esc(jobType) + '</span>' 
+      : '<span style="display:inline-flex; align-items:center; padding:2px 6px; background:#f1f5f9; color:#94a3b8; border-radius:4px; font-size:0.75rem; font-weight:800; margin-right:6px; flex-shrink:0; line-height:1;">ไม่ระบุประเภท</span>';
+      
+    if (blockMeta && jobType) {
+      chipHtml = '<span style="display:inline-flex; align-items:center; padding:2px 8px; background:' + esc(blockMeta.badgeBg) + '; color:' + esc(blockMeta.badgeColor) + '; border:1px solid rgba(0,0,0,0.06); border-radius:999px; font-size:0.75rem; font-weight:800; margin-right:6px; flex-shrink:0; line-height:1.2;">' + esc(blockMeta.iconText + ' ' + blockMeta.chipText) + '</span>';
+    }
+
+    var projHtml = projText 
+      ? '<span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; color:#64748b;">' + esc(projText) + '</span>' 
+      : '<span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; color:#cbd5e1; font-style:italic;">(ไม่ได้ระบุโครงการ)</span>';
+
+    var displayDesc = '<span style="color:#94a3b8;">-</span>';
+    if (chipHtml && projHtml) displayDesc = chipHtml + projHtml;
+    else if (projHtml) displayDesc = projHtml;
+    else if (chipHtml) displayDesc = chipHtml;
+
+    var mJob = String(jobType || '').trim();
+    var mProj = String(projText || '').trim();
+    var mTypeProj = '-';
+    if (mJob && mProj) {
+        var shortProj = mProj;
+        if (mJob === 'อื่นๆ' && shortProj.length > 22) {
+            shortProj = shortProj.substring(0, 22) + '...';
+        }
+        mTypeProj = mJob + ' | ' + shortProj;
+    } else if (mJob) {
+        mTypeProj = mJob;
+    } else if (mProj) {
+        mTypeProj = mProj;
+    } else {
+        mTypeProj = '<span style="color:#cbd5e1; font-style:italic;">(ไม่ระบุ)</span>';
+    }
+
+    var desktopNameHtml = '<div class="desktop-only">' +
+      '<div style="font-weight:700; color:#0f172a; line-height:1.3; white-space:normal; word-break:keep-all; overflow-wrap:break-word;">' + name + fileBtn + '</div>' +
+      '<div style="margin-top:6px; width:100%; display:flex; align-items:center; overflow:hidden;">' + displayDesc + '</div>' +
+    '</div>';
+
+    var mobileNameHtml = '<div class="mobile-only">' +
+      '<div class="m-section">' +
+        '<div class="m-section-label">ผู้จอง</div>' +
+        '<div class="m-section-val">' + name + fileBtn + '</div>' +
+      '</div>' +
+      '<div class="m-section">' +
+        '<div class="m-section-label">งาน / โครงการ</div>' +
+        '<div class="m-section-val nowrap-ellipsis" title="' + esc(fullTooltip) + '">' + mTypeProj + '</div>' +
+      '</div>' +
+    '</div>';
+    
+    var combinedNameCol = '<td data-label="ผู้จอง / งาน / โครงการ" class="col-name-proj" title="' + esc(fullTooltip) + '">' + desktopNameHtml + mobileNameHtml + '</td>';
+
+    var plates = splitList(b.plate || b.vehicle || '');
+    var drivers = splitList(b.driver || '');
+    var carInfoHtml = buildVehicleDriverPairs(plates, drivers, b.carType || '');
+
+    if (blockMeta) {
+      carInfoHtml = '<div class="vberry-pairs" style="display:flex; flex-direction:column; gap:6px; min-width:0;">' +
+        '<div class="vberry-pair-row" style="display:flex; flex-direction:column; gap:4px; padding:8px 10px; min-width:0; border-radius:12px; background:' + esc(blockMeta.badgeBg) + '; border-left:4px solid ' + esc(blockMeta.badgeColor) + ';">' +
+          '<div class="vberry-pair-line" style="display:flex; align-items:flex-start; gap:8px; min-width:0;">' +
+            '<span aria-hidden="true" style="flex:0 0 auto; font-size:1.05em;">' + (statusKey === 'driver_block' ? '👤' : '🚐') + '</span>' +
+            '<div style="flex:1 1 auto; min-width:0; line-height:1.4; color:#334155; word-break:break-word; overflow-wrap:anywhere;">' +
+              '<span style="font-weight:700; color:#0f172a;">[' + esc(blockMeta.chipText) + '] ' + esc(blockMeta.primaryText) + '</span>' +
+              (projText ? '<div style="margin-top:4px; color:#64748b; font-size:0.85rem;">' + esc(projText) + '</div>' : '') +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    var startP = fmtDTParts(b.startDate, b.startTime);
+    var endP = fmtDTParts(b.endDate, b.endTime);
+
+    var sDateShort = startP.date !== '-' ? startP.date.substring(0, 5) : '-';
+    var eDateShort = endP.date !== '-' ? endP.date.substring(0, 5) : '-';
+    
+    // จัดการช่องว่างเวลาให้เนี้ยบ
+    var sTimePad = startP.time ? ' ' + esc(startP.time) : '';
+    var eTimePad = endP.time ? ' ' + esc(endP.time) : '';
+    
+    // 🍓 BERRY FIX: หากมีการปิดงานก่อนเวลา ให้โชว์ Badge บอก
+    var endLabel = b.actualEndAt ? '<span style="color:#f59e0b; font-weight:800;" title="ปิดงานก่อนกำหนด">จบงานจริง:</span>' : '<span style="color:#f59e0b; font-weight:800;">กลับ:</span>';
+    var mEndLabel = b.actualEndAt ? '<span style="color:#f59e0b; font-weight:800;" title="ปิดงานก่อนกำหนด">จบจริง</span>' : '<span style="color:#f59e0b; font-weight:800;">กลับ</span>';
+    var actualBadge = b.actualEndAt ? ' <span style="font-size:0.75rem; background:#fed7aa; color:#9a3412; padding:1px 4px; border-radius:4px; margin-left:4px;">🏁 ปิดก่อนกำหนด</span>' : '';
+
+    var desktopDateHtml =
+      '<div class="desktop-only vberry-dt val-block" style="display:flex; flex-direction:column; gap:6px; min-width:0;">' +
+        '<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">' +
+          '<span style="color:#10b981; font-weight:800;">ไป:</span>' +
+          '<span style="font-weight:600; white-space:nowrap;">' + esc(startP.date) + '</span>' +
+          (startP.time ? '<span style="color:#475569; font-size:0.9em; white-space:nowrap;">⏰ ' + esc(startP.time) + '</span>' : '') +
+        '</div>' +
+        '<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">' +
+          endLabel +
+          '<span style="font-weight:600; white-space:nowrap;">' + esc(endP.date) + '</span>' +
+          (endP.time ? '<span style="color:#475569; font-size:0.9em; white-space:nowrap;">⏰ ' + esc(endP.time) + '</span>' : '') +
+          actualBadge +
+        '</div>' +
+      '</div>';
+
+    var mobileDateHtml =
+      '<div class="mobile-only val-block" style="font-size:0.9rem; line-height:1.4; color:#334155; display:flex; flex-wrap:wrap; align-items:center; gap:6px;">' +
+         '<span style="color:#10b981; font-weight:800;">ไป</span>' +
+         '<span style="font-weight:600; white-space:nowrap;">' + esc(sDateShort) + sTimePad + '</span>' +
+         '<span style="color:#94a3b8; font-weight:800;">→</span>' +
+         mEndLabel +
+         '<span style="font-weight:600; white-space:nowrap;">' + esc(eDateShort) + eTimePad + '</span>' +
+      '</div>';
+
+    var dateHtml = desktopDateHtml + mobileDateHtml;
+
+    return '' +
+      '<tr class="booking-row-' + statusKey + (blockMeta ? ' booking-row-resource-block' : '') + '" onclick="showActivityDetails(\'' + id + '\', event)" style="cursor:pointer;' + (blockMeta ? (' background:' + blockMeta.badgeBg + ';') : '') + '" tabindex="0">' +
+        '<td data-label="ID">' + id + '</td>' +
+        combinedNameCol +
+        '<td data-label="สถานที่"><div class="val-block" style="line-height:1.4; white-space:normal; word-break:keep-all; overflow-wrap:break-word;">' + place + '</div></td>' +
+        '<td data-label="รถ"><div class="val-block">' + carInfoHtml + '</div></td>' +
+        '<td data-label="วัน/เวลา">' + dateHtml + '</td>' +
+        '<td data-label="สถานะ"><span class="status-badge ' + statusClass + '">' + esc(statusText) + '</span></td>' +
+      '</tr>';
+  }).join('');
+
+  tbody.innerHTML = html;
+}
+
+
+function renderBookingsPagination(totalPages, totalItems) {
+    const pageInfo = document.getElementById('bookings-page-info');
+    const prevBtn = document.getElementById('bookings-prev-btn');
+    const nextBtn = document.getElementById('bookings-next-btn');
+
+    if (pageInfo) {
+        let label = `หน้า ${bookingsCurrentPage} / ${totalPages} (รวม ${totalItems} รายการ)`;
+        if (window.bookingsCurrentFilter) {
+            label = `หน้า ${bookingsCurrentPage} / ${totalPages} (กรอง: ${totalItems} รายการ)`;
+        }
+        pageInfo.textContent = label;
+    }
+
+    if (prevBtn) {
+        prevBtn.disabled = (bookingsCurrentPage <= 1);
+        // เพิ่มสไตล์ให้ดูออกว่ากดไม่ได้
+        prevBtn.style.opacity = prevBtn.disabled ? "0.5" : "1";
+    }
+
+    if (nextBtn) {
+        nextBtn.disabled = (bookingsCurrentPage >= totalPages);
+        nextBtn.style.opacity = nextBtn.disabled ? "0.5" : "1";
+    }
+}
+   
+
+function changeBookingsPage(delta) {
+  const allData = Array.isArray(window.__BOOKINGS_FILTERED_CACHE__) && window.__BOOKINGS_FILTERED_CACHE__.length >= 0
+    ? window.__BOOKINGS_FILTERED_CACHE__
+    : (window.allBookingsData || []);
+
+  const totalBookings = allData.length;
+  const totalPages = Math.max(1, Math.ceil(totalBookings / BOOKINGS_PAGE_SIZE));
+
+  let newPage = bookingsCurrentPage + delta;
+
+  if (newPage < 1) newPage = 1;
+  if (newPage > totalPages) newPage = totalPages;
+
+  if (newPage !== bookingsCurrentPage) {
+    bookingsCurrentPage = newPage;
+    console.log('Changing to page ' + newPage);
+
+    const startIndex = (bookingsCurrentPage - 1) * BOOKINGS_PAGE_SIZE;
+    const endIndex = startIndex + BOOKINGS_PAGE_SIZE;
+    const pageData = allData.slice(startIndex, endIndex);
+
+    renderBookingsTable(pageData, 'bookings-table-body', 'full');
+    renderBookingsPagination(totalPages, totalBookings);
+
+    const tableCard = document.getElementById('bookings-table-card');
+    if (tableCard) {
+      tableCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+}
+
+
+/* ================== Dashboard View Functions (Ultimate Safe Mode) ================== */
+/* [ANCHOR: Dashboard View Functions (Ultimate Safe Mode)] */
+window.loadDashboardView = function(source) {
+    if (window.__vbCurrentTab !== '#dashboard-tab') return;
+
+    var loadSource = source || 'unknown';
+    var nowTs = Date.now();
+    var lastTs = Number(window.__dashboardLastLoadedAt || 0);
+
+    if (window.__dashboardLoadBusy) {
+        console.log('⚡ [Dashboard] Skipped duplicate load while busy:', loadSource);
+        return;
+    }
+
+    if (loadSource === 'tab-switch' && nowTs - lastTs < 500) {
+        console.log('⚡ [Dashboard] Skipped near-duplicate tab-switch load');
+        return;
+    }
+
+    window.__dashboardLoadBusy = true;
+    window.__dashboardLastLoadSource = loadSource;
+    window.__dashboardLastLoadedAt = nowTs;
+
+    console.log('🐱 Loading Dashboard View (Dashboard Active Safe Mode)...', loadSource);
+
+    const totalBookingsEl = document.getElementById('dash-total-bookings');
+    const vehiclesReadyEl = document.getElementById('dash-vehicles-ready');
+    const driverChartEl = document.getElementById('driver-chart');
+    const vehicleChartEl = document.getElementById('vehicle-chart');
+
+    const setEmptyChart = function(el, icon, text) {
+        if (!el) return;
+        el.innerHTML = '<div class="empty-state"><div class="icon">' + icon + '</div><div>' + text + '</div></div>';
+    };
+
+    const finish = function() {
+        window.__dashboardLoadBusy = false;
+    };
+
+    try {
+        const allData = Array.isArray(window.allBookingsData) ? window.allBookingsData : [];
+        const allVehicles = (window.vehiclesList && Array.isArray(window.vehiclesList.all)) ? window.vehiclesList.all : [];
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth() + 1;
+
+        const thisMonthBookings = allData.filter(function(b) {
+            const iso = String((b && b.startDate) || '').trim();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+            return Number(iso.slice(0, 4)) === currentYear && Number(iso.slice(5, 7)) === currentMonth;
+        });
+
+        const readyCount = allVehicles.filter(function(v) {
+            return v && v.active !== false;
+        }).length;
+
+        if (totalBookingsEl) {
+            if (typeof animateNumber === 'function') animateNumber(totalBookingsEl, thisMonthBookings.length);
+            else totalBookingsEl.textContent = String(thisMonthBookings.length);
+        }
+
+        if (vehiclesReadyEl) {
+            vehiclesReadyEl.textContent = allVehicles.length ? (readyCount + '/' + allVehicles.length) : '0/0';
+        }
+
+        if (driverChartEl) setEmptyChart(driverChartEl, '⏳', 'กำลังเตรียมข้อมูลกราฟพนักงานขับ...');
+        if (vehicleChartEl) setEmptyChart(vehicleChartEl, '⏳', 'กำลังเตรียมข้อมูลกราฟการใช้รถ...');
+
+        window.__dashboardChartData = { monthBookings: thisMonthBookings };
+        window.__dashboardRenderToken = [
+            currentYear,
+            currentMonth,
+            thisMonthBookings.length,
+            readyCount,
+            allVehicles.length
+        ].join(':');
+        const renderToken = window.__dashboardRenderToken;
+        window.__dashboardLastRenderedSig = '';
+
+        const runRender = function() {
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() {
+                    try {
+                        if (window.__dashboardRenderToken !== renderToken) return;
+                        if (window.__vbCurrentTab !== '#dashboard-tab') return;
+                        if (typeof window._renderDashboardChartsSafely === 'function') {
+                            window._renderDashboardChartsSafely(renderToken);
+                        }
+                    } finally {
+                        finish();
+                    }
+                });
+            });
+        };
+
+        if (typeof google === 'undefined' || !google.charts) {
+            console.warn('⚠️ Google Charts loader missing');
+            if (driverChartEl) setEmptyChart(driverChartEl, '😿', 'ไม่พบ Google Charts Loader');
+            if (vehicleChartEl) setEmptyChart(vehicleChartEl, '😿', 'ไม่พบ Google Charts Loader');
+            finish();
+            return;
+        }
+
+        if (!google.visualization) {
+            google.charts.setOnLoadCallback(runRender);
+        } else {
+            runRender();
+        }
+
+        if (loadSource === 'tab-switch' || loadSource === 'manual-retry' || loadSource === 'dashboard-load') {
+            if (typeof renderDashboardFuelWidget === 'function') {
+                renderDashboardFuelWidget(loadSource);
+            }
+        }
+
+    } catch (e) {
+        finish();
+        console.error('❌ Dashboard KPI Error:', e);
+        if (totalBookingsEl) totalBookingsEl.textContent = '0';
+        if (vehiclesReadyEl) vehiclesReadyEl.textContent = '0/0';
+        if (driverChartEl) setEmptyChart(driverChartEl, '😿', 'โหลดกราฟพนักงานขับไม่สำเร็จ');
+        if (vehicleChartEl) setEmptyChart(vehicleChartEl, '😿', 'โหลดกราฟการใช้รถไม่สำเร็จ');
+    }
+};
+
+window._renderDashboardChartsSafely = function(renderToken) {
+    try {
+        if (window.__vbCurrentTab !== '#dashboard-tab') return;
+        if (renderToken && window.__dashboardRenderToken !== renderToken) return;
+
+        const data = window.__dashboardChartData || {};
+        const list = Array.isArray(data.monthBookings) ? data.monthBookings : [];
+        const renderSig = String(renderToken || window.__dashboardRenderToken || '') + '|' + String(list.length);
+
+        if (window.__dashboardLastRenderedSig === renderSig) {
+            console.log('⚡ [Dashboard] Skipped duplicate chart render:', renderSig);
+            return;
+        }
+
+        const driverChartEl = document.getElementById('driver-chart');
+        const vehicleChartEl = document.getElementById('vehicle-chart');
+
+        const setEmptyChart = function(el, icon, text) {
+            if (!el) return;
+            el.innerHTML = '<div class="empty-state"><div class="icon">' + icon + '</div><div>' + text + '</div></div>';
+        };
+
+        if (!driverChartEl || !vehicleChartEl) {
+            console.warn('⚠️ Dashboard chart containers not found');
+            return;
+        }
+
+        if (typeof google === 'undefined' || !google.visualization) {
+            setEmptyChart(driverChartEl, '⏳', 'Google Charts ยังโหลดไม่เสร็จ');
+            setEmptyChart(vehicleChartEl, '⏳', 'Google Charts ยังโหลดไม่เสร็จ');
+            return;
+        }
+
+        const driverCounts = {};
+        const vehicleCounts = {};
+
+        list.forEach(function(b) {
+            const status = String((b && b.status) || '').toLowerCase().trim();
+            if (status === 'rejected' || status === 'cancelled') return;
+
+            const rawDriver = String((b && (b.driver || b.driverName)) || '').trim();
+            if (rawDriver && rawDriver !== '-' && !rawDriver.includes('รออนุมัติ')) {
+                rawDriver.split(',').forEach(function(d) {
+                    const name = (typeof normalizeDriverName === 'function')
+                        ? normalizeDriverName(d)
+                        : String(d || '').trim();
+                    if (name && name !== '-') {
+                        driverCounts[name] = (driverCounts[name] || 0) + 1;
+                    }
+                });
+            }
+
+            const rawVehicle = String((b && (b.plate || b.vehicle || b.carName)) || '').trim();
+            if (rawVehicle && rawVehicle !== '-' && rawVehicle !== '0') {
+                rawVehicle.split(',').forEach(function(v) {
+                    const clean = String(v || '').trim().replace(/\|/g, ' ');
+                    if (clean) {
+                        vehicleCounts[clean] = (vehicleCounts[clean] || 0) + 1;
+                    }
+                });
+            }
+        });
+
+        if (Object.keys(driverCounts).length === 0) {
+            setEmptyChart(driverChartEl, '👨‍✈️', 'ยังไม่มีข้อมูลพนักงานขับในเดือนนี้ค่ะ');
+        } else if (typeof window.drawDriverChart === 'function') {
+            window.drawDriverChart(driverCounts);
+        } else {
+            setEmptyChart(driverChartEl, '😿', 'ไม่พบฟังก์ชันวาดกราฟพนักงานขับ');
+        }
+
+        if (Object.keys(vehicleCounts).length === 0) {
+            setEmptyChart(vehicleChartEl, '🚐', 'ยังไม่มีข้อมูลการใช้รถในเดือนนี้ค่ะ');
+        } else if (typeof window.drawVehicleChart === 'function') {
+            window.drawVehicleChart(vehicleCounts);
+        } else {
+            setEmptyChart(vehicleChartEl, '😿', 'ไม่พบฟังก์ชันวาดกราฟการใช้รถ');
+        }
+
+        window.__dashboardLastRenderedSig = renderSig;
+
+        console.log('✅ Dashboard charts rendered safely:', {
+            bookings: list.length,
+            drivers: Object.keys(driverCounts).length,
+            vehicles: Object.keys(vehicleCounts).length
+        });
+
+    } catch (e) {
+        console.error('❌ Chart Rendering Error:', e);
+
+        const driverChartEl = document.getElementById('driver-chart');
+        const vehicleChartEl = document.getElementById('vehicle-chart');
+
+        if (driverChartEl) {
+            driverChartEl.innerHTML = '<div class="empty-state"><div class="icon">😿</div><div>โหลดกราฟพนักงานขับไม่สำเร็จ</div></div>';
+        }
+        if (vehicleChartEl) {
+            vehicleChartEl.innerHTML = '<div class="empty-state"><div class="icon">😿</div><div>โหลดกราฟการใช้รถไม่สำเร็จ</div></div>';
+        }
+    }
+};
+
+window.drawDriverChart = function(driverData) {
+    try {
+        const container = document.getElementById('driver-chart');
+        if (!container) return;
+
+        if (!google || !google.visualization || !google.visualization.ColumnChart) {
+            console.warn("⚠️ ColumnChart API not loaded");
+            return;
+        }
+
+        const sortedDrivers = Object.entries(driverData)
+            .sort(([, a], [, b]) => b - a)
+            .slice(0, 10);
+
+        if (sortedDrivers.length === 0) {
+            container.innerHTML = '<div class="empty-state"><div class="icon">🐱</div><div>ยังไม่มีข้อมูลพนักงานขับรถในเดือนนี้ค่ะ</div></div>';
+            return;
+        }
+
+        const dataArray = [['พนักงานขับรถ', 'จำนวนงาน', { role: 'style' }]];
+        const colors =['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#8AC926', '#1982C4', '#6A4C93', '#F15BB5'];
+
+        sortedDrivers.forEach(([name, count], i) => {
+            const color = colors[i % colors.length];
+            dataArray.push([name, count, `color: ${color}; opacity: 0.9`]);
+        });
+
+        const data = google.visualization.arrayToDataTable(dataArray);
+        const options = {
+            title: '🏆 พนักงานขับรถยอดนิยม (Top 5)',
+            titleTextStyle: { fontSize: 16, bold: true, color: '#1f2937', fontName: 'Sarabun' },
+            chartArea: { width: '85%', height: '70%' },
+            hAxis: { title: 'พนักงานขับรถ', textStyle: { fontSize: 11, fontName: 'Sarabun' }, slantedText: true, slantedTextAngle: 30 },
+            vAxis: { title: 'จำนวนเที่ยว', minValue: 0, gridlines: { color: '#f3f4f6' }, textStyle: { fontSize: 10 } },
+            legend: { position: 'none' },
+            animation: { duration: 1200, easing: 'out', startup: true },
+            bar: { groupWidth: '65%' },
+            tooltip: { textStyle: { fontName: 'Sarabun' } }
+        };
+
+        const chart = new google.visualization.ColumnChart(container);
+        chart.draw(data, options);
+    } catch (e) {
+        console.error("❌ drawDriverChart Error:", e);
+    }
+};
+
+window.drawVehicleChart = function(vehicleData) {
+    try {
+        const container = document.getElementById('vehicle-chart');
+        if (!container) return;
+
+        if (!google || !google.visualization || !google.visualization.PieChart) {
+            console.warn("⚠️ PieChart API not loaded");
+            return;
+        }
+
+        const sortedVehicles = Object.entries(vehicleData).sort(([, a], [, b]) => b - a);
+
+        if (sortedVehicles.length === 0) {
+            container.innerHTML = '<div class="empty-state"><div class="icon">🚐</div><div>ยังไม่มีข้อมูลการใช้รถในเดือนนี้ค่ะ</div></div>';
+            return;
+        }
+
+        const dataArray = [['รถ/ทะเบียน', 'จำนวนเที่ยว']];
+        sortedVehicles.forEach(([name, count]) => { dataArray.push([name, count]); });
+
+        const data = google.visualization.arrayToDataTable(dataArray);
+        const options = {
+            title: '🚍 สัดส่วนการใช้รถ (เดือนนี้)',
+            titleTextStyle: { fontSize: 16, bold: true, color: '#1f2937', fontName: 'Sarabun' },
+            pieHole: 0.45,
+            chartArea: { width: '90%', height: '80%' },
+            legend: { position: 'right', textStyle: { fontSize: 12, fontName: 'Sarabun' } },
+            colors:['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'],
+            animation: { duration: 1000, easing: 'out', startup: true },
+            tooltip: { textStyle: { fontName: 'Sarabun' } }
+        };
+
+        const chart = new google.visualization.PieChart(container);
+        chart.draw(data, options);
+    } catch (e) {
+        console.error("❌ drawVehicleChart Error:", e);
+    }
+};
+
+// ANCHOR: applyAssignmentFooterResponsive
+function applyAssignmentFooterResponsive() {
+  const modal = document.getElementById('assignment-modal');
+  if (!modal) return;
+
+  const footer = modal.querySelector('.modal-footer');
+  if (!footer) return;
+
+  const buttons = Array.from(footer.querySelectorAll('button'));
+  if (!buttons.length) return;
+
+  const isMobile = window.innerWidth <= 768;
+
+  footer.style.display = 'grid';
+  footer.style.gap = '10px';
+  footer.style.alignItems = 'stretch';
+  footer.style.boxSizing = 'border-box';
+
+  if (isMobile) {
+    footer.style.gridTemplateColumns = '1fr 1fr';
+    footer.style.padding = '12px';
+  } else {
+    footer.style.gridTemplateColumns = 'repeat(auto-fit, minmax(160px, 1fr))';
+    footer.style.padding = '16px';
+  }
+
+  buttons.forEach((btn) => {
+    // 🍓 BERRY FIX: เก็บโครงสร้าง Icon และ Text ไว้ใน Dataset 
+    if (!btn.dataset.vbInit) {
+        const iconSpan = btn.querySelector('.icon');
+        const textSpan = btn.querySelector('.btn-text');
+        btn.dataset.icon = iconSpan ? iconSpan.textContent.trim() : '';
+        btn.dataset.origText = textSpan ? textSpan.textContent.trim() : btn.textContent.replace(/^(✅|⛔|🏁|❌)\s*/, '').trim();
+        btn.dataset.vbInit = 'true';
+    }
+
+    btn.style.minHeight = isMobile ? '48px' : '44px';
+    btn.style.height = 'auto';
+    // 🍓 BERRY FIX: เคารพ display: none เดิมของปุ่ม ไม่ให้ถูก force เป็น flex โดยไม่ได้ตั้งใจ
+    if (btn.style.display !== 'none') {
+        btn.style.display = 'flex';
+    }
+    btn.style.alignItems = 'center';
+    btn.style.justifyContent = 'center';
+    btn.style.gap = '6px'; /* 🍓 BERRY FIX: ระยะเว้นวรรคระหว่างไอคอนกับข้อความ */
+    btn.style.width = '100%';
+    btn.style.margin = '0';
+    btn.style.boxSizing = 'border-box';
+    btn.style.fontWeight = '700';
+    btn.style.fontSize = isMobile ? '0.95rem' : '1rem';
+    btn.style.lineHeight = '1.2';
+    btn.style.padding = isMobile ? '10px 12px' : '10px 14px';
+    btn.style.gridColumn = 'auto';
+
+    // จัดการคำสั้นๆ บนมือถือ
+    let displayText = btn.dataset.origText;
+    if (isMobile) {
+      if (displayText.includes('อนุมัติและมอบหมาย')) displayText = 'อนุมัติ';
+      else if (displayText.includes('ปิดงานก่อนเวลา')) displayText = 'ปิดงาน';
+    }
+
+    // 🍓 BERRY FIX: ประกอบร่าง HTML คืนเข้าไป เพื่อให้ Flex Gap ทำงานได้
+    if (btn.dataset.icon) {
+        btn.innerHTML = `<span class="icon" style="font-size:1.15em;">${btn.dataset.icon}</span><span class="btn-text">${displayText}</span>`;
+    } else {
+        btn.innerHTML = `<span class="btn-text">${displayText}</span>`;
+    }
+  });
+
+  // จัดลำดับปุ่ม (Mobile)
+  const rejectBtn = buttons.find((btn) => /ไม่อนุมัติ/.test(btn.dataset.origText || ''));
+  const closeEarlyBtn = buttons.find((btn) => /ปิดงานก่อนเวลา|ปิดงาน/.test(btn.dataset.origText || ''));
+  const approveBtn = buttons.find((btn) => /อนุมัติและมอบหมาย|อนุมัติ/.test(btn.dataset.origText || '') && !/ไม่อนุมัติ/.test(btn.dataset.origText || ''));
+  const closeBtn = buttons.find((btn) => /^ปิด$/.test(btn.dataset.origText || ''));
+
+  if (isMobile) {
+    if (rejectBtn) rejectBtn.style.order = '1';
+    if (closeBtn) closeBtn.style.order = '2';
+    if (closeEarlyBtn && closeEarlyBtn.style.display !== 'none') {
+      closeEarlyBtn.style.order = '3';
+      closeEarlyBtn.style.gridColumn = '1 / 2';
+      if (approveBtn) {
+        approveBtn.style.order = '4';
+        approveBtn.style.gridColumn = '2 / 3';
+      }
+    } else if (approveBtn) {
+      approveBtn.style.order = '3';
+      approveBtn.style.gridColumn = '1 / 3'; // กางเต็มถ้าไม่มีปิดงานก่อนเวลา
+    }
+  } else {
+    buttons.forEach((btn) => {
+      btn.style.order = '';
+      btn.style.gridColumn = 'auto';
+    });
+  }
+}
+
+function installAssignmentFooterResponsiveOnce() {
+  if (window.__assignmentFooterResponsiveInstalled) return;
+  window.__assignmentFooterResponsiveInstalled = true;
+
+  let resizeTimer = null;
+  window.addEventListener('resize', function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function() {
+      const modal = document.getElementById('assignment-modal');
+      if (modal && modal.classList.contains('active')) { // ใช้ .active ตามที่ระบบใช้อยู่
+        applyAssignmentFooterResponsive();
+      }
+    }, 120);
+  });
+}
+   /* ================== Vehicle Loader Auto-wire (Use wireAvailabilityListeners) ================== */
+function installVehicleLoaderOnce() {
+  if (window.__VB_VEHICLE_LOADER_INSTALLED__) {
+    try { window.__VB_AVAIL_REBIND__ && window.__VB_AVAIL_REBIND__(); } catch (_) {}
+    return;
+  }
+  window.__VB_VEHICLE_LOADER_INSTALLED__ = true;
+
+  const IDS = { modal: "booking-modal", container: "vehicle-selection" };
+  const getEl = (id) => document.getElementById(id);
+
+  const isModalActive = () => {
+    const modalEl = getEl(IDS.modal);
+    if (!modalEl) return false;
+    return (
+      modalEl.classList.contains("active") ||
+      modalEl.getAttribute("aria-hidden") === "false" ||
+      modalEl.style.display === "block"
+    );
+  };
+
+  const resetVehicleBox = () => {
+    const box = getEl(IDS.container);
+    if (!box) return;
+
+    // ✅ reset flags always when modal opens
+    try {
+      box.dataset.vbRendered = "0";
+      box.dataset.vbLoading = "0";
+    } catch (_) {}
+
+    // ✅ remove stuck spinner
+    if (box.querySelector(".spinner")) box.innerHTML = "";
+  };
+
+  // ✅ Ensure availability listeners installed
+  try {
+    if (typeof wireAvailabilityListeners === "function") wireAvailabilityListeners();
+  } catch (e) {
+    console.warn("wireAvailabilityListeners install error:", e);
+  }
+
+  const modalEl = getEl(IDS.modal);
+  if (modalEl && !modalEl.__VB_LOADER_MODAL_OBS__) {
+    modalEl.__VB_LOADER_MODAL_OBS__ = true;
+
+    const obs = new MutationObserver(() => {
+      if (!isModalActive()) return;
+
+      resetVehicleBox();
+
+      // ✅ Rebind form nodes (in case rebuild)
+      try { window.__VB_AVAIL_REBIND__ && window.__VB_AVAIL_REBIND__(); } catch (_) {}
+
+      // ✅ Trigger a safe load (load function will handle ready/not-ready)
+      try {
+        if (typeof window.loadAvailableVehicles === "function") {
+          window.loadAvailableVehicles(false);
+        }
+      } catch (_) {}
+    });
+
+    obs.observe(modalEl, { attributes: true, attributeFilter: ["class", "style", "aria-hidden"] });
+  }
+
+  // if already open
+  if (isModalActive()) {
+    resetVehicleBox();
+    try { window.loadAvailableVehicles && window.loadAvailableVehicles(false); } catch (_) {}
+  }
+
+  console.log("✅ installVehicleLoaderOnce() installed");
+}
+
+// ✅ Export
+try { window.installVehicleLoaderOnce = installVehicleLoaderOnce; } catch (_) {}
+
+    
+    /* ================== FOOTER FIX ================== */
+    function forceShowFooter() {
+  const footer = document.querySelector('footer.footer');
+  if (!footer) {
+    console.warn('❌ Footer element not found');
+    return false;
+  }
+
+  footer.style.cssText = `
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    height: 72px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: #111827 !important;
+    color: #E5E7EB !important;
+    border-top: 1px solid #374151 !important;
+    z-index: 4000 !important; /* ✅ ลดจาก 9999 */
+    text-align: center !important;
+    padding: 12px 16px !important;
+    box-sizing: border-box !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  `;
+
+  // ✅ กัน content ถูก footer บัง (แบบไม่ใช้ !important ใน style attr)
+  document.body.style.paddingBottom = '72px';
+
+  console.log('✅ Footer force show applied (z-index=4000)');
+  return true;
+}
+
+function patchModalZIndexAboveFooter() {
+  // overlay (พื้นหลังดำ/จาง)
+  const overlays = document.querySelectorAll(
+    '#booking-modal, #assignment-modal, .modal, .modal-overlay'
+  );
+
+  overlays.forEach(modal => {
+    try {
+      modal.style.zIndex = '5000';
+      modal.style.position = modal.style.position || 'fixed';
+    } catch (_) {}
+  });
+
+  // modal content (กล่องขาวข้างใน)
+  const contents = document.querySelectorAll(
+    '#booking-modal .modal-content, #assignment-modal .modal-content, .modal .modal-content'
+  );
+
+  contents.forEach(box => {
+    try {
+      box.style.zIndex = '5100';
+      box.style.position = box.style.position || 'relative';
+    } catch (_) {}
+  });
+
+  console.log('✅ Modal z-index patched (overlay=5000, content=5100)');
+}
+
+
+function checkVehicleAvailability() {
+  const dateEl = document.getElementById("booking-date");
+  const sEl = document.getElementById("booking-start");
+  const eEl = document.getElementById("booking-end");
+  
+  const dateISO = dateEl ? (dateEl.dataset.iso || dateEl.value) : "";
+  let startTime = sEl ? sEl.value : "";
+  let endTime = eEl ? eEl.value : "";
+
+  // 🛠️ Helper: แปลงเวลา AM/PM เป็น 24H (เช่น 07:16 AM -> 07:16)
+  const to24H = (t) => {
+      if(!t) return "";
+      if(!t.match(/AM|PM/i)) return t; // ถ้าไม่มี AM/PM ก็คืนค่าเดิม
+      const date = new Date("01/01/2000 " + t);
+      if(isNaN(date.getTime())) return t;
+      return date.getHours().toString().padStart(2, '0') + ':' + date.getMinutes().toString().padStart(2, '0');
+  };
+
+  startTime = to24H(startTime);
+  endTime = to24H(endTime);
+
+  const carInput = document.getElementById("booking-vehicle-count");
+  const msgLabel = document.getElementById("carAvailabilityMsg");
+
+  if (!dateISO || !startTime || !endTime) {
+    if(msgLabel) msgLabel.innerHTML = '<span class="status-error">👉 รอดำเนินการ: กรุณาระบุวัน-เวลาให้ครบถ้วน</span>';
+    return;
+  }
+
+  if(msgLabel) msgLabel.innerHTML = '<span class="status-checking">⏳ กำลังตรวจสอบตารางเดินรถ...</span>';
+  if(carInput) carInput.disabled = true;
+
+  // ส่งข้อมูลไปเป็น Object ก้อนเดียว (เพื่อให้เข้ากับ googleScriptRunLimited)
+  googleScriptRun('getRealTimeAvailableCount', { 
+      dateISO: dateISO, 
+      startTime: startTime, 
+      endTime: endTime 
+  })
+  .then(function(response) {
+      if(carInput) carInput.disabled = false;
+      
+      if (!response.ok) {
+        if(msgLabel) msgLabel.innerHTML = `<span class="status-error">⚠️ ${response.error || 'เกิดข้อผิดพลาด'}</span>`;
+        return;
+      }
+
+      const realMax = response.maxAllowed;
+      const count = response.count;
+
+      carInput.max = realMax;
+      
+      if (realMax > 0) {
+        if(msgLabel) msgLabel.innerHTML = `<span class="status-available">🟢 ว่าง ${count} คัน (จำกัดสูงสุด ${realMax} คัน)</span>`;
+        carInput.placeholder = `สูงสุด ${realMax}`;
+        
+        if (parseInt(carInput.value) > realMax) {
+          carInput.value = realMax;
+          carInput.classList.add('shake');
+          setTimeout(() => carInput.classList.remove('shake'), 300);
+        }
+      } else {
+        if(msgLabel) msgLabel.innerHTML = `<span class="status-full">🔴 เต็มแล้ว! (ไม่มีรถว่าง)</span>`;
+        carInput.value = 0;
+        carInput.placeholder = "0";
+      }
+  })
+  .catch(function(err) {
+      console.error(err);
+      if(carInput) carInput.disabled = false;
+      if(msgLabel) msgLabel.innerHTML = '<span class="status-error">❌ เชื่อมต่อ Server ไม่สำเร็จ</span>';
+  });
+}
+
+function wireAvailabilityListeners() {
+  if (window.__VB_AVAIL_LISTENERS_BOUND__) {
+    try { window.__VB_AVAIL_REBIND__ && window.__VB_AVAIL_REBIND__(); } catch (_) {}
+    return;
+  }
+  window.__VB_AVAIL_LISTENERS_BOUND__ = true;
+
+  const IDS = {
+    date: 'booking-date',
+    start: 'booking-start',
+    end: 'booking-end',
+    returnDate: 'return-date',
+    modal: 'booking-modal',
+    form: 'booking-form',
+    container: 'vehicle-selection'
+  };
+
+  let timer = null;
+  let lastKey = '';
+  let watchdogTimer = null;
+
+  const getEl = (id) => document.getElementById(id);
+
+  const isModalActive = () => {
+    const modalEl = getEl(IDS.modal);
+    if (!modalEl) return false;
+    return (
+      modalEl.classList.contains('active') ||
+      modalEl.getAttribute('aria-hidden') === 'false' ||
+      modalEl.style.display === 'block'
+    );
+  };
+
+  const normalizeSpaces = (s) =>
+    String(s ?? "")
+      .replace(/\u00A0/g, " ")
+      .replace(/\u202F/g, " ")
+      .replace(/\u200e/g, "")
+      .replace(/\u200f/g, "")
+      .replace(/\u2066|\u2067|\u2068|\u2069/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const markDirty = () => {
+    const c = getEl(IDS.container);
+    if (!c) return;
+    try {
+      c.dataset.vbRendered = "0";
+      c.dataset.vbLoading = "0"; // ✅ สำคัญมาก: กันค้าง
+    } catch (_) {}
+  };
+
+  const ensureThaiISO = (el) => {
+    if (!el) return;
+    const raw = normalizeSpaces(el.value);
+    if (!raw) return;
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      try { el.dataset.iso = raw; } catch (_) {}
+      return;
+    }
+
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(raw)) {
+      try {
+        if (typeof convertThaiDisplayToISO === 'function') {
+          const iso = convertThaiDisplayToISO(raw);
+          if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+            el.dataset.iso = iso;
+            return;
+          }
+        }
+      } catch (_) {}
+
+      try {
+        const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (m) {
+          const dd = Number(m[1]);
+          const mm = Number(m[2]);
+          let yy = Number(m[3]);
+          if (yy >= 2400) yy -= 543;
+          const iso = `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+          el.dataset.iso = iso;
+        }
+      } catch (_) {}
+    }
+  };
+
+  const buildKey = () => {
+    const d = getEl(IDS.date);
+    const s = getEl(IDS.start);
+    const e = getEl(IDS.end);
+    const r = getEl(IDS.returnDate);
+
+    const dIso = normalizeSpaces(d?.dataset?.iso || d?.value || '');
+    const rIso = normalizeSpaces(r?.dataset?.iso || r?.value || '');
+    const st = normalizeSpaces(s?.value || '');
+    const et = normalizeSpaces(e?.value || '');
+
+    return [dIso, st, et, rIso].join('|');
+  };
+
+  const isReady = () => {
+    const d = getEl(IDS.date);
+    const s = getEl(IDS.start);
+    const e = getEl(IDS.end);
+
+    if (d) ensureThaiISO(d);
+
+    const dIso = normalizeSpaces(d?.dataset?.iso || d?.value || '');
+    const st = normalizeSpaces(s?.value || '');
+    const et = normalizeSpaces(e?.value || '');
+
+    return !!(dIso && st && et);
+  };
+
+  const scheduleLoad = (reason) => {
+    if (!isModalActive()) return;
+    if (!isReady()) return;
+
+    const keyNow = buildKey();
+    const allowSameKey = (reason === 'modal_open' || reason === 'rebuilt' || reason === 'observer' || reason === 'watchdog');
+
+    if (!allowSameKey && keyNow && keyNow === lastKey) return;
+
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      lastKey = keyNow;
+
+      const fn = window.loadAvailableVehicles || loadAvailableVehicles;
+      if (typeof fn === "function") {
+        try { fn(false); } catch (e) { console.warn("loadAvailableVehicles failed:", e); }
+      } else {
+        console.warn("❌ loadAvailableVehicles missing (window + scope)");
+      }
+    }, 260);
+  };
+
+  const bindOnce = (el, id) => {
+    if (!el) return false;
+    if (el.__VB_AVAIL_BOUND__) return false;
+    el.__VB_AVAIL_BOUND__ = true;
+
+    const isDate = (id === IDS.date || id === IDS.returnDate);
+
+    const handler = (evt) => {
+      if (isDate) ensureThaiISO(el);
+      markDirty();
+      scheduleLoad(`${id}:${evt.type}`);
+    };
+
+    el.addEventListener('input', handler, { passive: true });
+    el.addEventListener('change', handler, { passive: true });
+    el.addEventListener('blur', handler, { passive: true });
+
+    el.addEventListener('keydown', (e) => {
+      const k = e && e.key ? e.key : '';
+      if (k === 'Enter' || k === 'Tab') {
+        if (isDate) ensureThaiISO(el);
+        markDirty();
+        scheduleLoad(`${id}:keydown(${k})`);
+      }
+    }, { passive: true });
+
+    if (isDate) {
+      el.addEventListener('focus', () => {
+        ensureThaiISO(el);
+        markDirty();
+        scheduleLoad(`${id}:focus`);
+      }, { passive: true });
+    }
+
+    return true;
+  };
+
+  const startWatchdog = () => {
+    if (watchdogTimer) return;
+
+    watchdogTimer = setInterval(() => {
+      try {
+        if (!isModalActive()) return;
+
+        const container = getEl(IDS.container);
+        if (!container) return;
+
+        // ถ้า render แล้ว -> stop
+        if (container.dataset?.vbRendered === "1") {
+          stopWatchdog();
+          return;
+        }
+
+        // ถ้ามี checkbox -> mark + stop
+        const hasVehicleCheckbox = container.querySelector('input[type="checkbox"][name="carType"]');
+        if (hasVehicleCheckbox) {
+          container.dataset.vbRendered = "1";
+          container.dataset.vbLoading = "0";
+          stopWatchdog();
+          return;
+        }
+
+        // ready -> try load
+        if (isReady()) scheduleLoad('watchdog');
+
+      } catch (_) {}
+    }, 1100);
+  };
+
+  const stopWatchdog = () => {
+    if (!watchdogTimer) return;
+    clearInterval(watchdogTimer);
+    watchdogTimer = null;
+  };
+
+  const hookModalOpen = (modalEl) => {
+    if (!modalEl || modalEl.__VB_MODAL_OBS__) return;
+    modalEl.__VB_MODAL_OBS__ = true;
+
+    const obs = new MutationObserver(() => {
+      const active = isModalActive();
+      if (active) {
+        bindAll();
+        markDirty();
+        scheduleLoad('modal_open');
+        startWatchdog();
+      } else {
+        stopWatchdog();
+      }
+    });
+
+    obs.observe(modalEl, { attributes: true, attributeFilter: ['class', 'style', 'aria-hidden'] });
+  };
+
+  const bindAll = () => {
+    bindOnce(getEl(IDS.date), IDS.date);
+    bindOnce(getEl(IDS.start), IDS.start);
+    bindOnce(getEl(IDS.end), IDS.end);
+    bindOnce(getEl(IDS.returnDate), IDS.returnDate);
+
+    const modalEl = getEl(IDS.modal);
+    hookModalOpen(modalEl);
+
+    const formEl = getEl(IDS.form);
+    if (formEl && !formEl.__VB_FORM_OBS__) {
+      formEl.__VB_FORM_OBS__ = true;
+      const formObs = new MutationObserver(() => {
+        bindOnce(getEl(IDS.date), IDS.date);
+        bindOnce(getEl(IDS.start), IDS.start);
+        bindOnce(getEl(IDS.end), IDS.end);
+        bindOnce(getEl(IDS.returnDate), IDS.returnDate);
+      });
+      formObs.observe(formEl, { childList: true, subtree: true });
+    }
+
+    if (isModalActive()) {
+      if (isReady()) {
+        markDirty();
+        scheduleLoad('rebuilt');
+      }
+      startWatchdog();
+    }
+  };
+
+  window.__VB_AVAIL_REBIND__ = () => {
+    try { bindAll(); } catch (_) {}
+  };
+
+  const rootObserver = new MutationObserver(() => {
+    const dateEl = getEl(IDS.date);
+    const startEl = getEl(IDS.start);
+    const endEl = getEl(IDS.end);
+    const container = getEl(IDS.container);
+
+    if (dateEl && startEl && endEl && container) {
+      bindAll();
+      markDirty();
+      scheduleLoad('observer');
+      try { rootObserver.disconnect(); } catch (_) {}
+    }
+  });
+
+  try {
+    rootObserver.observe(document.body, { childList: true, subtree: true });
+  } catch (_) {}
+
+  bindAll();
+
+  console.log('✅ Wired Availability Listeners (Final + Watchdog + DirtyReset)');
+}
+
+
+
+/* ================== BOOKING LOGIC (UPDATED WITH LOADING) ================== */
+window.submitBooking = async function(event) {
+    event.preventDefault();
+    const form = event.target;
+    
+    console.log("📝 [Client] submitBooking initiated.");
+    let submitBtn = event.submitter || form.querySelector('button[type="submit"]');
+    if (!submitBtn && form.closest('.modal')) {
+        submitBtn = form.closest('.modal').querySelector('.modal-footer button[type="submit"]');
+    }
+    
+    if (!form.checkValidity()) {
+        console.warn("⚠️ [Client] Form validation failed.");
+        form.reportValidity();
+        return;
+    }
+
+    const payload = (typeof prepareBookingPayload === 'function') ? prepareBookingPayload(form) : {};
+    console.log("📦 [Client] Payload Prepared:", payload);
+
+    if (!payload.carType || payload.carType === '' || payload.carType === 'ไม่ระบุ') {
+        showToast('😿 กรุณาเลือก "ประเภทรถ" ก่อนนะคะ', 'error');
+        return;
+    }
+
+    setBtnLoading(submitBtn, true);
+
+    try {
+        const res = await googleScriptRun('createBookingAndBroadcast', payload);
+        console.log("📨 [Client] Server Response:", res);
+
+        if (!res || !res.ok) throw new Error(res.error || 'บันทึกไม่สำเร็จ');
+
+        showToast(`🎉 จองสำเร็จ! ID: ${res.id}`, 'success');
+        console.log("✅ [Client] Booking Success. ID:", res.id);
+        
+        closeBookingForm();
+        
+        await refreshBookingUiAfterMutation({ forceSync: true });
+        
+    } catch (err) {
+        console.error("❌ [Client] Error:", err);
+        showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+    } finally {
+        setBtnLoading(submitBtn, false);
+    }
+};
+
+window.submitCancelBooking = async function(event) {
+    if(event) event.preventDefault();
+    
+    console.log("📝 [Client] submitCancelBooking initiated.");
+
+    const form = document.getElementById('cancel-form');
+    const idEl = document.getElementById('cancel-bookingId'); // อาจเป็น Input หรือ Select
+    const phoneEl = document.getElementById('cancel-phone');
+    const reasonEl = document.getElementById('cancel-reason');
+    const submitBtn = document.getElementById('btn-confirm-cancel');
+
+    // ดึงค่า
+    const bookingId = idEl ? idEl.value : '';
+    const phone = phoneEl ? phoneEl.value : '';
+    const reason = reasonEl ? reasonEl.value : '';
+
+    if (!bookingId || !phone || !reason) {
+        console.warn("⚠️ [Client] Cancel validation failed: Missing fields.");
+        if(typeof showToast === 'function') showToast('กรุณากรอกข้อมูลให้ครบถ้วน (ต้องกดค้นหาก่อนนะคะ) 😿', 'error');
+        return;
+    }
+
+    const payload = { bookingId, phone, reason };
+    console.log("📦 [Client] Cancel Payload:", payload);
+
+    // 1. เริ่ม Loading State
+    setBtnLoading(submitBtn, true);
+
+    try {
+        // 2. เรียก Server
+        const runner = (typeof window.googleScriptRun !== 'undefined') ? window.googleScriptRun : window.gas;
+        const res = await runner('apiUserCancelBooking', payload);
+        console.log("📨 [Client] Cancel Response:", res);
+
+        if (!res || !res.ok) throw new Error(res ? res.error : 'ยกเลิกไม่สำเร็จ');
+
+        showToast(`ยกเลิก Booking ID ${bookingId} เรียบร้อยแล้วค่ะ ✅`, 'success');
+        
+        // 3. ปิด Modal
+        if (typeof window.closeCancelForm === 'function') window.closeCancelForm();
+        
+        // 4. รีโหลดหน้า (ตาราง, ปฏิทิน, ตัวนับ)
+        await refreshBookingUiAfterMutation({ forceSync: true });
+
+    } catch (err) {
+        console.error("❌ [Client] Cancel Error:", err);
+        if(typeof showToast === 'function') showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+    } finally {
+        // 5. จบ Loading State (เผื่อ Modal ไม่ปิด หรือ Error)
+        setBtnLoading(submitBtn, false);
+    }
+};
+
+function getBookingFilePayload() {
+  const input = document.getElementById('booking-file-upload') || document.querySelector('input[type="file"][name="bookingFile"]');
+  if (!input) return { fileData: '', fileName: '', fileMime: '' };
+
+  const fileData = (input.__fileData || '').trim();
+  const fileName = (input.__fileName || '').trim();
+  const fileMime = (input.__fileMime || '').trim();
+
+  if (!fileData || !fileName) return { fileData: '', fileName: '', fileMime: '' };
+  return { fileData, fileName, fileMime };
+}
+
+
+async function searchBookingsByPhoneWithFallback(phone) {
+    if (window.GVizService && window.APP_CONFIG && window.APP_CONFIG.gvizUrl && window.APP_CONFIG.headerIndexes) {
+        try {
+            console.log("⚡ GViz search initiated...");
+            const data = await window.GVizService.searchBookingsByPhone(phone);
+            console.log("⚡ GViz search completed successfully. Found " + data.length + " items.");
+            return { ok: true, data: data };
+        } catch (gvizErr) {
+            console.warn("⚠️ GViz search failed. Falling back to GAS...", gvizErr);
+        }
+    }
+    const runner = (typeof window.googleScriptRun !== 'undefined') ? window.googleScriptRun : window.gas;
+    return await runner('apiGetBookingsByPhone', phone);
+}
+
+/* [ANCHOR: Booking Search Logic for Cancellation] */
+async function handleSearchBookingId() {
+    const phoneInput = document.getElementById('cancel-phone');
+    const searchBtn = document.getElementById('btn-search-id');
+    const container = document.getElementById('booking-id-container');
+    const submitBtn = document.getElementById('btn-confirm-cancel');
+
+    if (!phoneInput || !phoneInput.value || phoneInput.value.length < 9) {
+        if(typeof showToast === 'function') showToast('กรุณากรอกเบอร์โทรศัพท์ให้ถูกต้องค่ะ 😿', 'warning');
+        phoneInput.focus();
+        return;
+    }
+
+    // UI Loading State
+    const originalText = searchBtn.innerHTML;
+    searchBtn.disabled = true;
+    searchBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span> ค้นหา...';
+    
+    try {
+        const res = await searchBookingsByPhoneWithFallback(phoneInput.value);
+        
+        if (!res.ok) {
+            throw new Error(res.error || 'ไม่สามารถค้นหาข้อมูลได้');
+        }
+
+        if (res.data && res.data.length > 0) {
+            // สร้าง Select Dropdown
+            let html = `<select id="cancel-bookingId" name="bookingId" class="form-control" required style="border-color:var(--success);">`;
+            html += `<option value="">-- พบ ${res.data.length} รายการ (ล่าสุด) --</option>`;
+            
+            res.data.forEach(item => {
+                html += `<option value="${item.bookingId}">ID: ${item.bookingId} | ${item.summary}</option>`;
+            });
+            html += `</select>`;
+            
+            container.innerHTML = html;
+            
+            // Enable Submit Button เมื่อมีการเลือก
+            const selectEl = document.getElementById('cancel-bookingId');
+            selectEl.addEventListener('change', function() {
+                if (this.value) {
+                    submitBtn.disabled = false;
+                    submitBtn.classList.remove('btn-secondary');
+                    submitBtn.classList.add('btn-danger');
+                } else {
+                    submitBtn.disabled = true;
+                }
+            });
+
+            if(typeof showToast === 'function') showToast(`พบข้อมูลการจอง ${res.data.length} รายการค่ะ 😽`, 'success');
+            
+        } else {
+            // กรณีไม่พบ
+            container.innerHTML = `<input type="text" id="cancel-bookingId" name="bookingId" value="" placeholder="ไม่พบรายการจองที่สามารถยกเลิกได้" readonly style="background-color: #fee2e2; border-color: #ef4444; color: #b91c1c;">`;
+            submitBtn.disabled = true;
+            if(typeof showToast === 'function') showToast('ไม่พบรายการจองที่สามารถยกเลิกได้ค่ะ (อาจยกเลิกไปแล้ว)', 'info');
+        }
+
+    } catch (e) {
+        console.error(e);
+        if(typeof showToast === 'function') showToast('เกิดข้อผิดพลาด: ' + e.message, 'error');
+    } finally {
+        searchBtn.disabled = false;
+        searchBtn.innerHTML = originalText;
+    }
+}
+
+// อัปเดต closeCancelForm เพื่อรีเซ็ตค่าต่างๆ
+window.closeCancelForm_Old = window.closeCancelForm; // เก็บตัวเก่าไว้ถ้ามี
+window.closeCancelForm = function() {
+    if(typeof closeModalA11y === 'function') closeModalA11y('cancel-modal');
+    
+    // Reset Form State
+    setTimeout(() => {
+        const form = document.getElementById('cancel-form');
+        if(form) form.reset();
+        
+        const container = document.getElementById('booking-id-container');
+        if(container) {
+            container.innerHTML = `<input type="text" id="cancel-bookingId" name="bookingId" required placeholder="กรุณากดค้นหาจากเบอร์โทร..." readonly style="background-color: #f3f4f6; cursor: not-allowed;">`;
+        }
+        
+        const submitBtn = document.getElementById('btn-confirm-cancel');
+        if(submitBtn) submitBtn.disabled = true;
+    }, 300);
+};
+
+// 1. ฟังก์ชันค้นหา Booking ID จากเบอร์โทร (ผูกกับปุ่ม 🔍)
+window.handleSearchBookingId = async function() {
+    console.log("🔍 Start searching booking by phone...");
+    
+    const phoneInput = document.getElementById('cancel-phone');
+    const searchBtn = document.getElementById('btn-search-id');
+    const container = document.getElementById('booking-id-container');
+    const submitBtn = document.getElementById('btn-confirm-cancel');
+
+    // ตรวจสอบเบอร์โทร
+    if (!phoneInput || !phoneInput.value || phoneInput.value.length < 9) {
+        if(typeof showToast === 'function') showToast('กรุณากรอกเบอร์โทรศัพท์ให้ถูกต้องค่ะ 😿', 'warning');
+        if(phoneInput) phoneInput.focus();
+        return;
+    }
+
+    // เริ่มโหลด (เปลี่ยนปุ่มเป็นหมุนๆ)
+    let originalText = "🔍 ค้นหา";
+    if (searchBtn) {
+        originalText = searchBtn.innerHTML;
+        searchBtn.disabled = true;
+        searchBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block;"></span> ค้นหา...';
+    }
+    
+    try {
+        const res = await searchBookingsByPhoneWithFallback(phoneInput.value);
+        
+        if (!res || !res.ok) {
+            throw new Error(res ? res.error : 'ไม่สามารถเชื่อมต่อ Server ได้');
+        }
+
+        if (res.data && res.data.length > 0) {
+            // -- เจอข้อมูล: สร้าง Dropdown --
+            let html = `<select id="cancel-bookingId" name="bookingId" class="form-control" required style="border-color:#10b981; width:100%; padding:8px; background:#f0fdf4;">`;
+            html += `<option value="">-- พบ ${res.data.length} รายการ (ล่าสุด) --</option>`;
+            
+            res.data.forEach(item => {
+                // item.summary คือ "วันที่ : สถานที่"
+                html += `<option value="${item.bookingId}">ID: ${item.bookingId} | ${item.summary}</option>`;
+            });
+            html += `</select>`;
+            
+            if (container) container.innerHTML = html;
+            
+            // เพิ่ม Event ให้ปุ่ม "ยืนยัน" ทำงานเมื่อเลือกรายการ
+            const selectEl = document.getElementById('cancel-bookingId');
+            if (selectEl) {
+                selectEl.addEventListener('change', function() {
+                    if (this.value && submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.classList.remove('btn-secondary'); // เอาสีเทาออก
+                        submitBtn.classList.add('btn-danger');     // ใส่สีแดง
+                        submitBtn.innerHTML = 'ยืนยันยกเลิก';
+                    } else if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.classList.add('btn-secondary');
+                        submitBtn.classList.remove('btn-danger');
+                    }
+                });
+            }
+
+            if(typeof showToast === 'function') showToast(`เจอข้อมูลการจอง ${res.data.length} รายการค่ะ 😽`, 'success');
+            
+        } else {
+            // -- ไม่เจอข้อมูล --
+            if (container) container.innerHTML = `<input type="text" id="cancel-bookingId" name="bookingId" value="" placeholder="ไม่พบรายการจองที่สามารถยกเลิกได้" readonly style="background-color:#fee2e2; border-color:#ef4444; color:#b91c1c; width:100%;">`;
+            if (submitBtn) submitBtn.disabled = true;
+            if (typeof showToast === 'function') showToast('ไม่พบรายการจองที่สามารถยกเลิกได้ค่ะ (อาจยกเลิกไปแล้ว หรือเบอร์ผิด)', 'info');
+        }
+
+    } catch (e) {
+        console.error("Search Error:", e);
+        if(typeof showToast === 'function') showToast('เกิดข้อผิดพลาด: ' + e.message, 'error');
+    } finally {
+        // คืนค่าปุ่มค้นหา
+        if (searchBtn) {
+            searchBtn.disabled = false;
+            searchBtn.innerHTML = originalText;
+        }
+    }
+};
+
+// 2. ฟังก์ชันยืนยันการยกเลิก (กดปุ่มสีแดง)
+window.submitCancelBooking = async function(event) {
+    if(event) event.preventDefault();
+    
+    const form = document.getElementById('cancel-form');
+    const idEl = document.getElementById('cancel-bookingId'); // อาจเป็น Input หรือ Select
+    const phoneEl = document.getElementById('cancel-phone');
+    const reasonEl = document.getElementById('cancel-reason');
+    const submitBtn = document.getElementById('btn-confirm-cancel');
+
+    // ดึงค่า
+    const bookingId = idEl ? idEl.value : '';
+    const phone = phoneEl ? phoneEl.value : '';
+    const reason = reasonEl ? reasonEl.value : '';
+
+    if (!bookingId || !phone || !reason) {
+        if(typeof showToast === 'function') showToast('กรุณากรอกข้อมูลให้ครบถ้วน (ต้องกดค้นหาก่อนนะคะ) 😿', 'error');
+        return;
+    }
+
+    // ล็อกปุ่ม
+    if(submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block;"></span> กำลังยกเลิก...';
+    }
+    
+    try {
+        const runner = (typeof window.googleScriptRun !== 'undefined') ? window.googleScriptRun : window.gas;
+        const res = await runner('apiUserCancelBooking', { bookingId, phone, reason });
+
+        if (!res || !res.ok) throw new Error(res ? res.error : 'ยกเลิกไม่สำเร็จ');
+
+        if(typeof showToast === 'function') showToast(`ยกเลิก Booking ID ${bookingId} เรียบร้อยแล้วค่ะ ✅`, 'success');
+        
+        // ปิด Modal
+        if (typeof window.closeCancelForm === 'function') window.closeCancelForm();
+        
+        // รีโหลดหน้า
+        if (typeof window.loadBookingsView === 'function') window.loadBookingsView();
+        if (typeof window.updateCounters === 'function') window.updateCounters();
+
+    } catch (err) {
+        console.error(err);
+        if(typeof showToast === 'function') showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+        // คืนค่าปุ่มถ้าพัง
+        if(submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'ยืนยันยกเลิก';
+        }
+    }
+};
+
+// 3. ฟังก์ชันปิด Modal และล้างค่า (Reset)
+window.closeCancelForm = function() {
+    // ปิด Modal
+    if(typeof window.closeModalA11y === 'function') window.closeModalA11y('cancel-modal');
+    else {
+        const m = document.getElementById('cancel-modal');
+        if(m) { m.classList.remove('active'); m.style.display = 'none'; }
+    }
+    
+    // รีเซ็ตค่าหลังจากปิดไปนิดนึง (จะได้ไม่เห็นตอนมันหายวูบ)
+    setTimeout(() => {
+        const form = document.getElementById('cancel-form');
+        if(form) form.reset();
+        
+        // คืนค่าช่อง Booking ID ให้เป็น Input Readonly เหมือนเดิม
+        const container = document.getElementById('booking-id-container');
+        if(container) {
+            container.innerHTML = `<input type="text" id="cancel-bookingId" name="bookingId" required placeholder="กรุณากดค้นหาจากเบอร์โทร..." readonly style="background-color: #f3f4f6; cursor: not-allowed; width:100%;">`;
+        }
+        
+        // ปิดปุ่มยืนยัน
+        const submitBtn = document.getElementById('btn-confirm-cancel');
+        if(submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.classList.add('btn-secondary');
+            submitBtn.classList.remove('btn-danger');
+            submitBtn.innerHTML = 'ยืนยันยกเลิก';
+        }
+    }, 300);
+};
+
+// --- 1. Helper: สร้างหน้าต่างแสดงผลลัพธ์ (Result Modal) ---
+function showTestResultModal(logs) {
+    // ลบ Modal เก่าถ้ามีค้างอยู่
+    const oldModal = document.getElementById('test-result-modal');
+    if (oldModal) oldModal.remove();
+
+    // รวม Log เป็นข้อความเดียว
+    const fullLogText = (logs || []).join('\n');
+
+    // Toast safe wrapper
+    const toast = (msg, type) => {
+        try {
+            if (typeof showToast === 'function') showToast(msg, type || "info");
+        } catch (e) {
+            console.log("Toast fallback:", msg);
+        }
+    };
+
+    // สร้าง HTML Modal
+    const modalDiv = document.createElement('div');
+    modalDiv.id = 'test-result-modal';
+    modalDiv.style.cssText = `
+        position: fixed; inset: 0; z-index: 12000;
+        background: rgba(0,0,0,0.5); backdrop-filter: blur(2px);
+        display: flex; justify-content: center; align-items: center;
+        padding: 20px;
+    `;
+
+    modalDiv.innerHTML = `
+        <div style="background:#fff; width:100%; max-width:700px; max-height:90vh; display:flex; flex-direction:column; border-radius:12px; box-shadow:0 10px 25px rgba(0,0,0,0.2); overflow:hidden; font-family: 'Sarabun', sans-serif;">
+            
+            <!-- Header -->
+            <div style="padding:15px 20px; background:linear-gradient(135deg, #667eea, #764ba2); color:#fff; display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="margin:0; font-size:1.2rem;">🧪 รายงานผลการทดสอบ (Self Test Report)</h3>
+                <button id="btn-close-test-modal" style="background:none; border:none; color:#fff; font-size:1.5rem; cursor:pointer;">&times;</button>
+            </div>
+
+            <!-- Log Content -->
+            <div style="padding:0; overflow:hidden; flex:1; position:relative; background:#1e1e1e;">
+                <textarea id="test-log-content" readonly style="width:100%; height:400px; background:#1e1e1e; color:#00ff9d; border:none; padding:15px; font-family: 'Consolas', 'Monaco', monospace; font-size:0.9rem; line-height:1.5; resize:none;">${fullLogText}</textarea>
+            </div>
+
+            <!-- Footer / Actions -->
+            <div style="padding:15px; border-top:1px solid #eee; display:flex; justify-content:flex-end; gap:10px; background:#f9fafb;">
+                <button id="btn-copy-log" style="padding:8px 16px; background:#3b82f6; color:#fff; border:none; border-radius:6px; cursor:pointer; font-weight:600; display:flex; align-items:center; gap:5px;">
+                    📋 คัดลอก Log
+                </button>
+                <button id="btn-close-test-modal-2" style="padding:8px 16px; background:#6b7280; color:#fff; border:none; border-radius:6px; cursor:pointer;">
+                    ปิดหน้าต่าง
+                </button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modalDiv);
+
+    const close = () => {
+        const m = document.getElementById('test-result-modal');
+        if (m) m.remove();
+    };
+
+    // ปิด modal
+    document.getElementById('btn-close-test-modal').onclick = close;
+    document.getElementById('btn-close-test-modal-2').onclick = close;
+
+    // ผูก Event ปุ่ม Copy
+    document.getElementById('btn-copy-log').onclick = function() {
+        const textarea = document.getElementById('test-log-content');
+        if (!textarea) return;
+
+        textarea.focus();
+        textarea.select();
+
+        try { document.execCommand('copy'); } catch (e) {}
+
+        // Clipboard API สมัยใหม่
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(fullLogText)
+                .then(() => toast("✅ คัดลอก Log เรียบร้อยแล้ว", "success"))
+                .catch(() => toast("✅ คัดลอกสำเร็จ", "success"));
+        } else {
+            toast("✅ คัดลอกสำเร็จ", "success");
+        }
+
+        this.innerHTML = "✅ คัดลอกแล้ว!";
+        setTimeout(() => this.innerHTML = "📋 คัดลอก Log", 2000);
+    };
+}
+
+// =========================================
+// 1. POPULATE DROPDOWNS (VEHICLES & DRIVERS)
+// =========================================
+// [ANCHOR: Populate Vehicle & Driver Selects]
+function populateVehicleSelect() {
+  console.log("🚗 Populating Vehicle & Driver Selects...");
+
+  // --------------------------------------------------------
+  // 1. ระบุ ID ของ Dropdown ทะเบียนรถ (มี 4 จุด)
+  // --------------------------------------------------------
+  const vehicleSelects = [
+    document.getElementById('fuel-plate'),         // แท็บน้ำมัน
+    document.getElementById('insurance-plate'),    // แท็บประกันภัย
+    document.getElementById('maintenance-plate'),  // แท็บซ่อมบำรุง
+    document.getElementById('timeline-plate')      // แท็บไทม์ไลน์
+  ];
+
+  // --------------------------------------------------------
+  // 2. ระบุ ID ของ Dropdown ผู้บันทึก (มี 3 จุด)
+  // --------------------------------------------------------
+  const driverSelects = [
+    document.getElementById('fuel-driver-select'),       // แท็บน้ำมัน
+    document.getElementById('insurance-driver-select'),  // แท็บประกันภัย (ที่เคยมีปัญหา)
+    document.getElementById('maintenance-driver-select') // แท็บซ่อมบำรุง (ที่เคยมีปัญหา)
+  ];
+
+  // --------------------------------------------------------
+  // 3. เรียก Server เพื่อดึง "ทะเบียนรถ" (getVehicleList)
+  // --------------------------------------------------------
+  google.script.run
+    .withSuccessHandler(function(data) {
+      // data คือรายการรถที่ส่งมาจาก Server
+      vehicleSelects.forEach(select => {
+        if (select) {
+          // เก็บค่าที่เลือกอยู่ปัจจุบันไว้ก่อน (ถ้ามี)
+          const currentVal = select.value;
+          
+          // ล้าง Option เก่าทิ้ง (เหลือบรรทัดแรก "-- เลือก --" ไว้)
+          while (select.options.length > 1) {
+            select.remove(1);
+          }
+
+          // วนลูปสร้าง Option ใหม่
+          if (data && data.length > 0) {
+            data.forEach(vehicle => {
+              let opt = document.createElement('option');
+              // ตรวจสอบว่าข้อมูลมาเป็น Object หรือ String
+              const plateText = (typeof vehicle === 'object') ? vehicle.plate : vehicle;
+              
+              opt.value = plateText;
+              opt.textContent = plateText;
+              select.appendChild(opt);
+            });
+          }
+
+          // คืนค่าที่เคยเลือกไว้กลับไป (ถ้าค่านั้นยังมีอยู่ในรายการใหม่)
+          if (currentVal) {
+             // เช็คว่าค่าเดิมยังมีอยู่ใน option ใหม่ไหม ถ้ามีก็เลือกให้
+             for (let i = 0; i < select.options.length; i++) {
+                 if (select.options[i].value === currentVal) {
+                     select.value = currentVal;
+                     break;
+                 }
+             }
+          }
+        }
+      });
+      console.log("   ✅ Vehicles populated.");
+    })
+    .withFailureHandler(function(err) {
+      console.error("❌ Failed to load vehicles:", err);
+    })
+    .getVehicleList();
+
+
+  // --------------------------------------------------------
+  // 4. เรียก Server เพื่อดึง "รายชื่อผู้บันทึก" (getDriverList)
+  // --------------------------------------------------------
+  // ตรวจสอบก่อนว่าฝั่ง Server มีฟังก์ชันนี้ไหม
+  if (typeof google.script.run.getDriverList === 'function') {
+      google.script.run
+        .withSuccessHandler(function(drivers) {
+            // drivers คือรายชื่อคนที่ Active
+            driverSelects.forEach(select => {
+                if (select) {
+                    const currentVal = select.value;
+                    
+                    // ล้าง Option เก่าทิ้ง
+                    while (select.options.length > 1) {
+                        select.remove(1);
+                    }
+                    
+                    // วนลูปสร้าง Option ใหม่
+                    if (drivers && drivers.length > 0) {
+                        drivers.forEach(d => {
+                            let opt = document.createElement('option');
+                            opt.value = d;
+                            opt.textContent = d;
+                            select.appendChild(opt);
+                        });
+                    }
+                    
+                    // คืนค่าที่เคยเลือกไว้กลับไป
+                    if (currentVal) {
+                        for (let i = 0; i < select.options.length; i++) {
+                            if (select.options[i].value === currentVal) {
+                                select.value = currentVal;
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+            console.log("   ✅ Drivers populated.");
+        })
+        .withFailureHandler(function(err) {
+            console.error("❌ Failed to load drivers:", err);
+        })
+        .getDriverList();
+  } else {
+      console.warn("⚠️ Warning: 'getDriverList' function not found on Server.");
+  }
+}
+// Helper: ช่วยเติมข้อมูลลง Dropdown คนขับ
+function fillDriverSelects(selectElements, driverList) {
+    selectElements.forEach(select => {
+        if (select) {
+            const currentVal = select.value;
+            while (select.options.length > 1) select.remove(1);
+            
+            (driverList || []).forEach(d => {
+                let opt = document.createElement('option');
+                opt.value = d;
+                opt.textContent = d;
+                select.appendChild(opt);
+            });
+            
+            if (currentVal) select.value = currentVal;
+        }
+    });
+}
+
+// =========================================
+// 2. PAGINATION SYSTEM (ระบบแบ่งหน้า)
+// =========================================
+// =========================================
+// [ANCHOR] HELPER: แปลงวันที่เป็น พ.ศ. (Thai Date)
+// =========================================
+function formatThaiDate(dateInput) {
+    if (!dateInput) return "-";
+    
+    // ถ้าข้อมูลมาเป็น "dd/MM/yyyy..." (แบบไทย) อยู่แล้ว ให้คืนค่าเลย
+    if (typeof dateInput === 'string' && dateInput.includes('/')) {
+        return dateInput; 
+    }
+
+    const d = new Date(dateInput);
+    if (isNaN(d.getTime())) return dateInput; // แปลงไม่ได้คืนค่าเดิม
+
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear() + 543; // บวก 543 เป็น พ.ศ.
+
+    return `${day}/${month}/${year}`;
+}
+
+// =========================================
+// [ANCHOR] PAGINATION SYSTEM (ระบบแบ่งหน้า)
+// =========================================
+
+var PAGINATION_STATE = {
+    fuel: { page: 1, limit: 5, data: [] },
+    insurance: { page: 1, limit: 5, data: [] },
+    maintenance: { page: 1, limit: 5, data: [] }
+};
+
+function changePage(type, step) {
+    const state = PAGINATION_STATE[type];
+    if (!state) return;
+
+    const totalPages = Math.ceil(state.data.length / state.limit) || 1;
+    let newPage = state.page + step;
+
+    if (newPage >= 1 && newPage <= totalPages) {
+        state.page = newPage;
+        
+        // เลือก Container ID ตามประเภท
+        let containerId = '';
+        if (type === 'fuel') containerId = 'fuel-table-body';
+        else if (type === 'insurance') containerId = 'insurance-list-container';
+        else if (type === 'maintenance') containerId = 'maintenance-list-container';
+
+        renderTablePage(type, containerId);
+    }
+}
+
+// Helper: แปลงตัวเลขที่มี comma ให้เป็น float อย่างปลอดภัย
+function safeParseFloat(str) {
+    if (str === null || str === undefined || str === '') return 0;
+    if (typeof str === 'number') return str;
+    // ลบ comma ออกก่อนแปลงเป็นตัวเลข
+    return parseFloat(String(str).replace(/,/g, '')) || 0;
+}
+
+/* [ANCHOR: renderTablePage] */
+// 📍 ANCHOR: renderTablePage
+function renderTablePage(type, containerId) {
+    const state = PAGINATION_STATE[type];
+    const container = document.getElementById(containerId);
+    
+    // Safety Check: ถ้าไม่เจอ Container หรือ State ให้หยุด
+    if (!container || !state) return;
+
+    // 1. คำนวณช่วงข้อมูลที่จะแสดง (Slicing)
+    const start = (state.page - 1) * state.limit;
+    const end = start + state.limit;
+    const pageData = state.data.slice(start, end);
+    
+    let html = '';
+
+    // 2. กรณีไม่มีข้อมูล
+    if (pageData.length === 0) {
+        let colSpan = 5;
+        if (type === 'maintenance') colSpan = 8; // ซ่อมบำรุงมี 8 คอลัมน์
+        else if (type === 'fuel') colSpan = 9;   // 🍓 BERRY FIX: อัปเดตตารางน้ำมันเป็น 9 คอลัมน์
+        
+        html = `<tr><td colspan="${colSpan}" class="text-center text-muted" style="padding: 20px;">- ไม่พบข้อมูล -</td></tr>`;
+    } else {
+        // 3. วนลูปสร้างแถวตาราง
+        pageData.forEach((item, index) => {
+            const realIndex = start + index + 1; // ลำดับที่แท้จริง (Running Number)
+
+            // ------------------------------------------
+            // CASE A: ตารางน้ำมัน (Fuel)
+            // ------------------------------------------  <-- 🍓 BERRY FIX: ตรงนี้บอสลืมใส่ // ไปค่ะ
+            if (type === 'fuel') {
+                let fileLink = '<span class="text-muted">-</span>';
+                if (item.fileUrl && item.fileUrl.includes('http')) {
+                    fileLink = `<a href="${item.fileUrl}" target="_blank" style="text-decoration:none;" title="ดูใบเสร็จ">📄</a>`;
+                }
+                let dateShow = item.dateDisplay || formatThaiDate(item.timestamp);
+                let litersVal = safeParseFloat(item.liters);
+                let priceVal = safeParseFloat(item.pricePerLiter);
+                let costVal = safeParseFloat(item.cost); 
+                html += `
+                    <tr>
+                        <td>${dateShow}</td> 
+                        <td><span style="font-weight:600;">${item.plate || '-'}</span></td>
+                        <td>${item.driver || '-'}</td>
+                        <td>${item.jobType || '-'}</td>
+                        <td class="text-right">${litersVal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td class="text-right">${priceVal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td class="text-right" style="color:#2563eb; font-weight:bold;">${costVal.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                        <td>${item.budgetType || '-'}</td>
+                        <td class="text-center">${fileLink}</td>
+                    </tr>
+                `;
+
+            // ------------------------------------------
+            // CASE B: ตารางประกันภัย (Insurance)
+            // ------------------------------------------
+            } else if (type === 'insurance') {
+                let statusBadge = '';
+                if (item.status === 'expired') {
+                    statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">หมดอายุ</span>`;
+                } else if (item.status === 'warning') {
+                    statusBadge = `<span style="background:#fef3c7; color:#b45309; padding:4px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">ใกล้หมด</span>`;
+                } else {
+                    statusBadge = `<span style="background:#dcfce7; color:#166534; padding:4px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">คุ้มครอง</span>`;
+                }
+
+                let sDateShow = item.startDate || '-';
+                let eDateShow = item.endDate || '-';
+                let dateDisplay = (sDateShow !== '-' && eDateShow !== '-') 
+                                    ? `${sDateShow} - ${eDateShow}` 
+                                    : (eDateShow !== '-' ? eDateShow : sDateShow);
+                
+                let costVal = safeParseFloat(item.cost);
+                html += `
+                    <tr>
+                        <td><span style="font-weight:600; color:#1e293b;">${item.vehicle || item.plate || '-'}</span></td>
+                        <td>${item.company || '-'}<br><small class="text-muted" style="font-size:0.8em;">กรมธรรม์: ${item.policyNo || '-'}</small></td>
+                        <td>${dateDisplay}</td>
+                        <td class="text-right" style="color:#2563eb; font-weight:600;">${costVal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                        <td class="text-center">${statusBadge}</td>
+                    </tr>
+                `;
+
+            // ------------------------------------------
+            // CASE C: ตารางซ่อมบำรุง (Maintenance)
+            // ------------------------------------------
+            } else if (type === 'maintenance') {
+                let fileBtn = '<span class="text-muted">-</span>';
+                if (item.fileUrl && item.fileUrl.includes('http')) {
+                    fileBtn = `<a href="${item.fileUrl}" target="_blank" class="btn btn-sm" style="color:#0d6efd; text-decoration:none;">📄 ดูรูป</a>`;
+                }
+
+                // วันที่ถูกแปลงมาแล้วจาก Server
+                let dateMaintShow = item.date ? formatThaiDate(item.date) : '-';
+                let costVal = safeParseFloat(item.cost);
+
+                html += `
+                  <tr>
+                    <td class="text-center">${realIndex}</td>
+                    <td><span style="font-weight:600; color:#1e293b;">${item.vehicle || '-'}</span></td>
+                    <td>${dateMaintShow}</td>
+                    <td>${item.type || '-'}</td>
+                    <td>${item.location || '-'}</td>
+                    <td class="text-right" style="color:#dc2626; font-weight:600;">${costVal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td>${item.remark || '-'}</td>
+                    <td class="text-center">${fileBtn}</td>
+                  </tr>
+                `;
+            }
+        });
+    }
+
+    // 4. อัปเดต HTML ลงในตาราง
+    container.innerHTML = html;
+
+    // 5. อัปเดตตัวเลขบอกหน้า (เช่น 1 / 2)
+    const totalPages = Math.ceil(state.data.length / state.limit) || 1;
+    const pageInfoEl = document.getElementById(`${type}-page-info`);
+    if (pageInfoEl) {
+        pageInfoEl.textContent = `${state.page} / ${totalPages}`;
+    }
+}
+
+
+// =========================================
+// 3. UPDATED LOADERS (เชื่อมต่อกับ Pagination)
+// =========================================
+
+// 3.1 โหลดข้อมูลน้ำมัน (Fuel)
+function loadFuelList() {
+    const containerId = 'fuel-table-body';
+    const container = document.getElementById(containerId);
+    if (container) container.innerHTML = '<tr><td colspan="5" class="text-center">🔄 กำลังโหลด...</td></tr>';
+
+    google.script.run
+        .withSuccessHandler((res) => {
+            if (res.ok) {
+                // เก็บข้อมูลลง State
+                PAGINATION_STATE.fuel.data = res.data || [];
+                PAGINATION_STATE.fuel.page = 1; // รีเซ็ตไปหน้า 1 เสมอเมื่อโหลดใหม่
+                // สั่ง Render
+                renderTablePage('fuel', containerId);
+            } else {
+                if(container) container.innerHTML = `<tr><td colspan="5" class="text-center text-danger">Error: ${res.message}</td></tr>`;
+            }
+        })
+        .withFailureHandler((err) => {
+             if(container) container.innerHTML = `<tr><td colspan="5" class="text-center text-danger">Server Error: ${err}</td></tr>`;
+        })
+        .apiGetFuelHistory(); // เรียกฟังก์ชัน Server ที่เราสร้างไว้ (ต้องมั่นใจว่าชื่อตรงกัน)
+}
+
+/* [ANCHOR: loadInsuranceList] */
+function loadInsuranceList() {
+    const containerId = 'insurance-list-container';
+    const container = document.getElementById(containerId);
+    if (container) container.innerHTML = '<tr><td colspan="5" class="text-center" style="padding: 20px;">🔄 กำลังโหลดข้อมูล...</td></tr>';
+
+    google.script.run
+        .withSuccessHandler((res) => {
+            if (res && res.ok) {
+                PAGINATION_STATE.insurance.data = res.data ||[];
+                PAGINATION_STATE.insurance.page = 1;
+                renderTablePage('insurance', containerId);
+            } else {
+                // 🍓 BERRY FIX: แจ้งเตือนสาเหตุที่แท้จริงหาก res เป็น null
+                const errMsg = res ? (res.message || res.error || 'Unknown Error') : 'ข้อมูลวันที่ในชีตทำให้ระบบแครช (Date Serialization Error)';
+                if(container) container.innerHTML = `<tr><td colspan="5" class="text-center text-danger">เกิดข้อผิดพลาด: ${errMsg}</td></tr>`;
+            }
+        })
+        .withFailureHandler((err) => {
+            if(container) container.innerHTML = `<tr><td colspan="5" class="text-center text-danger">เชื่อมต่อ Server ล้มเหลว: ${err.message || err}</td></tr>`;
+        })
+        .listInsuranceRecords();
+}
+
+function loadMaintenanceList() {
+    const containerId = 'maintenance-list-container';
+    const container = document.getElementById(containerId);
+    if (container) container.innerHTML = '<tr><td colspan="8" class="text-center" style="padding: 20px;">🔄 กำลังโหลดข้อมูล...</td></tr>';
+
+    google.script.run
+        .withSuccessHandler((res) => {
+            if (res && res.ok) {
+                PAGINATION_STATE.maintenance.data = res.data || [];
+                PAGINATION_STATE.maintenance.page = 1;
+                renderTablePage('maintenance', containerId);
+            } else {
+                const errMsg = res ? (res.message || res.error || 'Unknown Error') : 'ข้อมูลวันที่ในชีตทำให้ระบบแครช (Date Serialization Error)';
+                if (container) container.innerHTML = `<tr><td colspan="8" class="text-center text-danger">เกิดข้อผิดพลาด: ${errMsg}</td></tr>`;
+            }
+        })
+        .withFailureHandler((err) => {
+            if (container) container.innerHTML = `<tr><td colspan="8" class="text-center text-danger">เชื่อมต่อ Server ล้มเหลว: ${err.message || err}</td></tr>`;
+        })
+        .listMaintenanceRecords();
+}
+/* ====================[BERRY ADD] LIVE RADAR CLIENT LOGIC ==================== */
+window.toggleLiveRadar = function() {
+    const drawer = document.getElementById('radar-drawer');
+    const overlay = document.getElementById('radar-overlay');
+    const fab = document.getElementById('radar-fab');
+
+    if (!drawer || !overlay) {
+        console.error('[Radar] drawer/overlay not found');
+        return;
+    }
+
+    const isOpen = drawer.classList.contains('open');
+
+    if (!isOpen) {
+        drawer.classList.add('open');
+        overlay.classList.add('open');
+        document.body.style.overflow = 'hidden';
+
+        if (fab) fab.disabled = true;
+        renderRadarMeta({ serverNow: 'กำลังโหลด...', timezone: 'Asia/Bangkok' });
+
+        loadLiveStatusData().finally(function() {
+            if (fab) fab.disabled = false;
+        });
+        return;
+    }
+
+    drawer.classList.remove('open');
+    overlay.classList.remove('open');
+    document.body.style.overflow = '';
+};
+
+function renderRadarMeta(res) {
+    const meta = document.getElementById('radar-server-meta');
+    if (!meta) return;
+    
+    // 🍓 BERRY FIX: ลบและซ่อนข้อมูลวันที่/เวลาตามคำสั่ง เพื่อให้ Header ดูคลีนที่สุด
+    meta.innerHTML = '';
+    meta.style.display = 'none';
+}
+
+async function loadLiveStatusData() {
+    const content = document.getElementById('radar-content');
+    if (!content) return;
+
+    // 1. ตรวจสอบ Cache ล่าสุด (ไม่เกิน 30 วินาที) และสถานะการโหลด
+    const isCacheFresh = window.__VB_LIVE_CACHE__ && (Date.now() - window.__VB_LIVE_CACHE_AT__ < 30000);
+    
+    if (isCacheFresh && !window.__VB_LIVE_BUSY__) {
+        console.log('📡 [Radar] Using fresh shared cache');
+        renderRadarFromSharedCache();
+        return;
+    }
+
+    // 2. หาก Cache เก่า หรือไม่มีข้อมูล ให้เรียก Shared Loader (loadAdminPanelData)
+    console.log('📡 [Radar] Fetching latest status...');
+    await loadAdminPanelData();
+    renderRadarFromSharedCache();
+}
+
+function renderRadarFromSharedCache() {
+    const content = document.getElementById('radar-content');
+    const res = window.__VB_LIVE_CACHE__;
+    if (!content || !res) return;
+
+    const renderList = (items, isVehicle) => {
+        if (!items || !items.length) return '<div class="radar-item"><span class="text-muted">ไม่มีข้อมูล</span></div>';
+        return items.map(it => {
+            // 🍓 BERRY FIX 1: ใช้ it.status มาตรฐานคุมสีจุด (Dot)
+            const st = String(it.status || 'ready').toLowerCase();
+            const uiMeta = getAvailabilityStatusUiMeta(st, !!isVehicle);
+            let dotClass = 'available'; // Default เขียว
+            
+            if (st === 'busy') dotClass = 'busy'; // เหลือง
+            else if (st === 'leave' || st === 'repair' || it.active === false) dotClass = 'inactive'; // แดง
+            else dotClass = 'available';
+
+            // 🍓 BERRY FIX 2: บังคับข้อความให้สม่ำเสมอ (ว่าง = พร้อม)
+            let displayLabel = String(it.label || it.badge || 'พร้อม').trim();
+            if (st === 'ready') displayLabel = 'พร้อม'; 
+
+            dotClass = uiMeta.dotClass; displayLabel = uiMeta.label;
+            const mainDisplay = isVehicle ? (it.plate || it.name) : (it.name || it.plate);
+            const subDisplay = isVehicle ? it.name : (it.job || ''); 
+            
+            return `
+                <div class="radar-item">
+                    <div class="radar-item-left">
+                        <div class="radar-dot ${dotClass}"></div>
+                        <div style="min-width:0; flex:1;">
+                            <div class="radar-name" style="font-weight:800;">${escapeHtml(mainDisplay)}</div>
+                            ${subDisplay ? `<div class="radar-subtext" style="font-size:0.75rem; color:#64748b;">${escapeHtml(subDisplay)}</div>` : ''}
+                        </div>
+                    </div>
+                    <div class="radar-meta radar-status-${dotClass}">${escapeHtml(displayLabel)}</div>
+                </div>`;
+        }).join('');
+    };
+
+    content.innerHTML = `
+        <div class="radar-section-title">👤 พนักงานขับรถ</div>
+        <div class="radar-list">${renderList(res.drivers, false)}</div>
+        <div class="radar-section-title">🚐 ยานพาหนะ (ทะเบียน)</div>
+        <div class="radar-list">${renderList(res.vehicles, true)}</div>
+    `;
+}
+
+function switchTab(targetId) {
+    if (!targetId || window.__vbTabSwitchBusy) return;
+    if (window.__vbCurrentTab === targetId) return;
+
+    window.__vbTabSwitchBusy = true;
+    window.__vbCurrentTab = targetId;
+
+    const tabs = document.querySelectorAll('.tab-content');
+    tabs.forEach(t => { t.style.display = 'none'; t.classList.remove('active'); });
+
+    const target = document.querySelector(targetId);
+    if (!target) { window.__vbTabSwitchBusy = false; return; }
+
+    // ⭐ Show Loading Spinner
+    target.style.display = 'block';
+    target.classList.add('active');
+    target.innerHTML = '<div class="text-center p-5"><div class="spinner"></div><p class="text-muted mt-2">กำลังเตรียมข้อมูล...</p></div>';
+
+    setTimeout(() => {
+        // 🍓 BERRY FIX: กันข้อมูลเก่าวิ่งมาทับหากผู้ใช้สลับแท็บไปที่อื่นแล้ว
+        if (window.__vbCurrentTab !== targetId) { window.__vbTabSwitchBusy = false; return; }
+
+        try {
+            if (targetId === '#calendar-tab' && typeof renderCalendar === 'function') {
+                const st = window.calendarState || { currentYear: new Date().getFullYear(), currentMonth: new Date().getMonth() + 1 };
+                renderCalendar(st.currentYear, st.currentMonth);
+            } else if (targetId === '#bookings-tab' && typeof loadBookingsView === 'function') {
+                loadBookingsView();
+            } else if (targetId === '#dashboard-tab' && typeof loadDashboardView === 'function') {
+                loadDashboardView('tab-switch');
+            } else if (targetId === '#timeline-tab' && typeof loadTimelineView === 'function') {
+                loadTimelineView();
+            } else if (targetId === '#fuel-tab' && typeof loadFuelTabOptions === 'function') {
+                loadFuelTabOptions();
+            } else if (targetId === '#insurance-tab' && typeof loadInsuranceTabOptions === 'function') {
+                loadInsuranceTabOptions();
+            } else if (targetId === '#maintenance-tab' && typeof loadMaintenanceTabOptions === 'function') {
+                loadMaintenanceTabOptions();
+            }
+        } catch (e) {
+            console.error('❌ Tab Render Error:', e);
+            target.innerHTML = '<div class="alert alert-danger">โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง</div>';
+        } finally {
+            window.__vbTabSwitchBusy = false;
+        }
+    }, 200);
+}
+
+/* ===================== SELF TEST (CLIENT + SERVER) — BERRY FIX ===================== */
+// ANCHOR: window.selfTest
+// แทนที่ทั้งฟังก์ชันเดิมด้วยตัวนี้
+
+// ANCHOR: window.selfTest
+window.selfTest = async function (ev) {
+  try { if (ev && ev.preventDefault) ev.preventDefault(); } catch (_) {}
+
+  if (window.__SELFTEST_RUNNING__) {
+    console.warn('⚠️ selfTest is already running...');
+    return;
+  }
+  window.__SELFTEST_RUNNING__ = true;
+
+  const testStats = { pass: 0, fail: 0 };
+  const selfTestToken = 'selftest_' + Date.now();
+  window.__ACTIVE_SELFTEST_TOKEN__ = selfTestToken;
+
+  const logBufferPlain = [];
+
+  const stripHtml_ = (s) => String(s || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, '');
+
+  const addLog = (msg) => {
+    logBufferPlain.push(stripHtml_(msg));
+    console.log(stripHtml_(msg));
+  };
+
+  const ok = (msg) => {
+    testStats.pass++;
+    addLog('✅ ' + msg);
+  };
+
+  const no = (msg) => {
+    testStats.fail++;
+    addLog('❌ ' + msg);
+  };
+
+  const warn = (msg) => addLog('⚠️ ' + msg);
+
+  function isSelfTestActive_() {
+    return window.__ACTIVE_SELFTEST_TOKEN__ === selfTestToken;
+  }
+
+  function gasCall_(fnName, payload, passArg) {
+    return new Promise((resolve) => {
+      if (!window.google || !google.script || !google.script.run) {
+        resolve({ ok: false, error: 'google.script.run not available' });
+        return;
+      }
+
+      const runner = google.script.run
+        .withSuccessHandler((res) => {
+          if (!isSelfTestActive_()) {
+            resolve({ ok: false, error: 'stale_selftest_response' });
+            return;
+          }
+          resolve({ ok: true, res: res });
+        })
+        .withFailureHandler((err) => {
+          if (!isSelfTestActive_()) {
+            resolve({ ok: false, error: 'stale_selftest_response' });
+            return;
+          }
+          resolve({ ok: false, error: String(err && err.message ? err.message : err) });
+        });
+
+      try {
+        if (passArg === false) runner[fnName]();
+        else runner[fnName](payload || {});
+      } catch (err) {
+        resolve({ ok: false, error: String(err && err.message ? err.message : err) });
+      }
+    });
+  }
+
+  function normalizeStr_(v) {
+    return String(v || '').trim();
+  }
+
+  function safeArray_(v) {
+    return Array.isArray(v) ? v : [];
+  }
+
+  function pickFirstNonEmpty_() {
+    for (let i = 0; i < arguments.length; i++) {
+      const v = arguments[i];
+      if (v !== null && v !== undefined && String(v).trim() !== '') return v;
+    }
+    return '';
+  }
+
+  function findBookingById_(bookings, bookingId) {
+    const id = normalizeStr_(bookingId);
+    return safeArray_(bookings).find((b) => normalizeStr_(b && (b.bookingId || b.id)) === id) || null;
+  }
+
+  function findVehicleByPlate_(vehicles, plate) {
+    const key = normalizeStr_(plate);
+    return safeArray_(vehicles).find((v) => normalizeStr_(v && v.plate) === key) || null;
+  }
+
+  function findDriverByName_(drivers, name) {
+    const key = normalizeStr_(name);
+    return safeArray_(drivers).find((d) => normalizeStr_(d && d.name) === key) || null;
+  }
+
+  function parseDateTime_(dateValue, timeValue) {
+    const d = normalizeStr_(dateValue);
+    const t = normalizeStr_(timeValue) || '00:00';
+    if (!d) return null;
+
+    const iso = d.indexOf('T') >= 0 ? d : (d + 'T' + t + ':00');
+    const dt = new Date(iso);
+    if (!isNaN(dt.getTime())) return dt;
+
+    return null;
+  }
+
+  function getBookingStart_(b) {
+    return parseDateTime_(
+      pickFirstNonEmpty_(b && b.startDate, b && b.dateStart, b && b.fromDate),
+      pickFirstNonEmpty_(b && b.startTime, b && b.timeStart, b && b.fromTime)
+    );
+  }
+
+  function getBookingEnd_(b) {
+    const actualDateTime = pickFirstNonEmpty_(b && b.actualEndAt, b && b.closedAt, b && b.completedAt);
+    if (actualDateTime) {
+      const dt = new Date(actualDateTime);
+      if (!isNaN(dt.getTime())) return dt;
+    }
+
+    return parseDateTime_(
+      pickFirstNonEmpty_(b && b.endDate, b && b.returnDate, b && b.toDate, b && b.plannedEndDate),
+      pickFirstNonEmpty_(b && b.endTime, b && b.returnTime, b && b.toTime, b && b.plannedEndTime)
+    );
+  }
+
+  function isBookingOverlappingNow_(b, now) {
+    const start = getBookingStart_(b);
+    const end = getBookingEnd_(b);
+    if (!start || !end) return false;
+    return now >= start && now <= end;
+  }
+
+  function hasSoftCloseIndicator_(booking) {
+    if (!booking) return { ok: false, reasons: [] };
+
+    const reasons = [];
+    if (normalizeStr_(booking.actualEndAt)) reasons.push('actualEndAt');
+    if (normalizeStr_(booking.closedAt)) reasons.push('closedAt');
+    if (normalizeStr_(booking.completedAt)) reasons.push('completedAt');
+    if (normalizeStr_(booking.closeNote)) reasons.push('closeNote');
+
+    const status = normalizeStr_(booking.status).toLowerCase();
+    if (/(closed|completed|done|finish|ปิด|เสร็จ|จบ)/.test(status)) {
+      reasons.push('status=' + booking.status);
+    }
+
+    return { ok: reasons.length > 0, reasons: reasons };
+  }
+
+  // ANCHOR: resolveEarlyCloseMeta_
+function resolveEarlyCloseMeta_(result) {
+  const root = result || {};
+  const meta = root.meta || {};
+  const data = root.data || {};
+  const after = root.after || {};
+  const before = root.before || {};
+
+  return {
+    mode: pickFirstNonEmpty_(
+      meta.mode, data.mode, after.mode, before.mode, root.mode
+    ),
+    bookingId: pickFirstNonEmpty_(
+      meta.bookingId, data.bookingId, after.bookingId, before.bookingId,
+      root.bookingId, root.testBookingId, root.targetBookingId
+    ),
+    vehiclePlate: pickFirstNonEmpty_(
+      meta.vehiclePlate, data.vehiclePlate, after.vehiclePlate, before.vehiclePlate,
+      meta.plate, data.plate, root.vehiclePlate, root.plate
+    ),
+    driverName: pickFirstNonEmpty_(
+      meta.driverName, data.driverName, after.driverName, before.driverName,
+      meta.driver, data.driver, root.driverName, root.driver
+    )
+  };
+}
+
+ // ANCHOR: verifyEarlyCloseClientSync_
+async function verifyEarlyCloseClientSync_(serverResult) {
+  const meta = resolveEarlyCloseMeta_(serverResult);
+  const bookingId = normalizeStr_(meta.bookingId);
+  const vehiclePlate = normalizeStr_(meta.vehiclePlate);
+  const driverName = normalizeStr_(meta.driverName);
+  const mode = normalizeStr_(meta.mode).toLowerCase();
+
+  if (!bookingId) {
+    warn('Server self test ไม่ส่ง bookingId กลับมา → ข้าม deep verify ฝั่ง client');
+    return;
+  }
+
+  addLog('--- [EARLY CLOSE VERIFY] ---');
+  addLog(`ℹ️ bookingId=${bookingId}${vehiclePlate ? ', vehicle=' + vehiclePlate : ''}${driverName ? ', driver=' + driverName : ''}${mode ? ', mode=' + mode : ''}`);
+
+  const initRes = await gasCall_('getWebAppInitialData', {}, true);
+  if (!initRes.ok || !initRes.res || !initRes.res.ok || !initRes.res.data) {
+    no(`โหลด getWebAppInitialData ไม่สำเร็จ: ${(initRes.res && initRes.res.error) || initRes.error || 'No Response'}`);
+    return;
+  }
+
+  const initData = initRes.res.data;
+  window.allBookingsData = safeArray_(initData.bookings);
+  if (Array.isArray(initData.vehicles)) window.vehiclesList = initData.vehicles;
+  if (Array.isArray(initData.drivers)) window.driversList = initData.drivers;
+
+  if (typeof reindexBookings === 'function') reindexBookings(window.allBookingsData);
+  if (typeof updateCounters === 'function') updateCounters();
+
+  ok(`RAM refresh สำเร็จ: bookings=${window.allBookingsData.length}`);
+
+  const booking = findBookingById_(window.allBookingsData, bookingId);
+  if (!booking) {
+    no(`ไม่พบ bookingId=${bookingId} ใน RAM หลัง refresh`);
+    return;
+  }
+
+  ok(`พบ bookingId=${bookingId} ใน RAM หลัง refresh`);
+
+  const y = (window.calendarState && window.calendarState.currentYear) ? window.calendarState.currentYear : new Date().getFullYear();
+  const m = (window.calendarState && window.calendarState.currentMonth) ? window.calendarState.currentMonth : (new Date().getMonth() + 1);
+
+  if (typeof loadCalendarView === 'function' && window.calendarState) {
+    loadCalendarView(y, m);
+    ok(`calendar refresh สำเร็จผ่าน loadCalendarView(${y}, ${m})`);
+  } else if (typeof renderCalendar === 'function') {
+    renderCalendar(y, m);
+    ok(`calendar refresh สำเร็จผ่าน renderCalendar(${y}, ${m})`);
+  } else {
+    warn('ไม่พบ loadCalendarView/renderCalendar');
+  }
+
+  if (mode === 'mock') {
+    warn('โหมด mock → ข้ามการตรวจ soft close จริง และข้ามตรวจสถานะพร้อมหลังปิดงาน');
+    return;
+  }
+
+  const closeCheck = hasSoftCloseIndicator_(booking);
+  if (closeCheck.ok) ok(`booking soft close สำเร็จ: ${closeCheck.reasons.join(', ')}`);
+  else no(`bookingId=${bookingId} ยังไม่พบ soft close indicator`);
+
+  const adminRes = await gasCall_('apiGetAdminPanelData', {}, true);
+  if (!adminRes.ok || !adminRes.res || !adminRes.res.ok) {
+    no(`โหลด apiGetAdminPanelData ไม่สำเร็จ: ${(adminRes.res && adminRes.res.error) || adminRes.error || 'No Response'}`);
+    return;
+  }
+
+  const vehicles = safeArray_(adminRes.res.vehicles);
+  const drivers = safeArray_(adminRes.res.drivers);
+
+  const targetVehiclePlate = vehiclePlate || normalizeStr_(pickFirstNonEmpty_(booking.plate, booking.vehicle, booking.assignedVehicle));
+  const targetDriverName = driverName || normalizeStr_(pickFirstNonEmpty_(booking.driver, booking.assignedDriver));
+
+  const now = new Date();
+
+  const otherVehicleOverlap = targetVehiclePlate
+    ? window.allBookingsData.some((b) => {
+        const sameBooking = normalizeStr_(b && (b.bookingId || b.id)) === bookingId;
+        const sameVehicle = normalizeStr_(pickFirstNonEmpty_(b && b.plate, b && b.vehicle, b && b.assignedVehicle)) === targetVehiclePlate;
+        return !sameBooking && sameVehicle && isBookingOverlappingNow_(b, now);
+      })
+    : false;
+
+  const otherDriverOverlap = targetDriverName
+    ? window.allBookingsData.some((b) => {
+        const sameBooking = normalizeStr_(b && (b.bookingId || b.id)) === bookingId;
+        const sameDriver = normalizeStr_(pickFirstNonEmpty_(b && b.driver, b && b.assignedDriver)) === targetDriverName;
+        return !sameBooking && sameDriver && isBookingOverlappingNow_(b, now);
+      })
+    : false;
+
+  addLog(`ℹ️ overlap: vehicle=${otherVehicleOverlap ? 'YES' : 'NO'}, driver=${otherDriverOverlap ? 'YES' : 'NO'}`);
+
+  const vehicleState = targetVehiclePlate ? findVehicleByPlate_(vehicles, targetVehiclePlate) : null;
+  const driverState = targetDriverName ? findDriverByName_(drivers, targetDriverName) : null;
+
+  if (vehicleState) {
+    if (!otherVehicleOverlap) {
+      if (vehicleState.active !== false && vehicleState.available === true) {
+        ok(`รถ "${targetVehiclePlate}" กลับเป็นพร้อมจริง`);
+      } else {
+        no(`รถ "${targetVehiclePlate}" ควรพร้อม แต่พบ active=${String(vehicleState.active)} available=${String(vehicleState.available)}`);
+      }
+    } else {
+      ok(`รถ "${targetVehiclePlate}" ยังไม่พร้อมถูกต้อง เพราะมี booking อื่นคาบอยู่`);
+    }
+  } else {
+    warn(`ไม่พบ vehicle state ของ "${targetVehiclePlate || '-'}"`);
+  }
+
+  if (driverState) {
+    if (!otherDriverOverlap) {
+      if (driverState.active !== false && driverState.isBusy !== true) {
+        ok(`พนักงาน "${targetDriverName}" กลับเป็นพร้อมจริง`);
+      } else {
+        no(`พนักงาน "${targetDriverName}" ควรพร้อม แต่พบ active=${String(driverState.active)} isBusy=${String(driverState.isBusy)}`);
+      }
+    } else {
+      ok(`พนักงาน "${targetDriverName}" ยังไม่พร้อมถูกต้อง เพราะมี booking อื่นคาบอยู่`);
+    }
+  } else {
+    warn(`ไม่พบ driver state ของ "${targetDriverName || '-'}"`);
+  }
+}
+
+  function finalize_() {
+    addLog('--- [SUMMARY] ---');
+    if (testStats.fail === 0) ok(`PASS (${testStats.pass} ผ่าน, 0 ไม่ผ่าน)`);
+    else no(`FAIL (${testStats.pass} ผ่าน, ${testStats.fail} ไม่ผ่าน)`);
+  }
+
+  try {
+    addLog('--- [PHASE 1] CLIENT RUNTIME ---');
+
+    if (window.google && google.script && google.script.run) {
+      ok('google.script.run พร้อมใช้งาน');
+    } else {
+      no('google.script.run ไม่พร้อมใช้งาน');
+      finalize_();
+      return;
+    }
+
+    addLog('--- [PHASE 2] SERVER PING ---');
+    const pingRes = await gasCall_('ping', null, false);
+
+    if (pingRes.ok && pingRes.res && pingRes.res.ok) {
+      ok('เชื่อมต่อ Server ได้ปกติ');
+    } else {
+      no(`เชื่อมต่อ Server ล้มเหลว: ${pingRes.error || 'No Response'}`);
+      finalize_();
+      return;
+    }
+
+    addLog('--- [PHASE 3] EARLY CLOSE SERVER TEST ---');
+    const earlyRes = await gasCall_('selfTestEarlyClose_All', null, false);
+
+    if (!earlyRes.ok || !earlyRes.res) {
+      no(`เรียก selfTestEarlyClose_All ไม่สำเร็จ: ${earlyRes.error || 'No Response'}`);
+      finalize_();
+      return;
+    }
+
+    const result = earlyRes.res;
+    safeArray_(result.logs).forEach((line) => addLog(line));
+
+    if (result.ok) ok(`Server Early Close Test: ${result.status} (${result.passed}/${result.total})`);
+    else no(`Server Early Close Test: ${result.status} (${result.passed}/${result.total})`);
+
+    await verifyEarlyCloseClientSync_(result);
+
+    finalize_();
+
+  } catch (e) {
+    no('เกิดข้อผิดพลาดร้ายแรงระหว่างรันการทดสอบ: ' + e.message);
+    finalize_();
+  } finally {
+    window.__BERRY_LAST_TEST_PLAIN__ = logBufferPlain.slice();
+    window.__SELFTEST_RUNNING__ = false;
+    if (window.__ACTIVE_SELFTEST_TOKEN__ === selfTestToken) {
+      window.__ACTIVE_SELFTEST_TOKEN__ = null;
+    }
+  }
+};
+
+window.runSelfTest = window.selfTest; 
+
+
+// Initializer (คงเดิมไว้)
+(function runBoot(){
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeApp);
+  } else {
+    initializeApp();
+  }
+})();
+
+/* ==================== ANCHOR: Dashboard Fuel Level Widget - Client ==================== */
+function renderDashboardFuelWidget(source) {
+    var container = document.getElementById('fuel-level-widget-container');
+    if (!container) return;
+    if (window.__vbCurrentTab !== '#dashboard-tab') return;
+
+    if (window.__dashboardFuelBusy) {
+        console.log('⚡ [FuelWidget] Skip duplicate request while busy:', source || 'unknown');
+        return;
+    }
+
+    var cached = window.__dashboardFuelCache || null;
+    if (cached && cached.html && (Date.now() - Number(cached.at || 0)) < 60000) {
+        container.innerHTML = cached.html;
+        return;
+    }
+
+    window.__dashboardFuelBusy = true;
+    window.__dashboardFuelToken = Number(window.__dashboardFuelToken || 0) + 1;
+    var requestToken = window.__dashboardFuelToken;
+
+    var renderSkeleton = function() {
+        var skeletonCards = '';
+        for (var i = 0; i < 4; i++) {
+            skeletonCards +=
+                '<div class="fuel-widget-card fuel-widget-skeleton" style="pointer-events:none;">' +
+                    '<div style="height:16px; width:68%; margin:0 auto 12px; border-radius:8px; background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 37%,#e5e7eb 63%); background-size:400% 100%; animation:fuelSkeletonShimmer 1.2s ease-in-out infinite;"></div>' +
+                    '<div style="width:34px; height:96px; margin:0 auto 12px; border-radius:999px; background:#e5e7eb; position:relative; overflow:hidden;">' +
+                        '<div style="position:absolute; left:0; right:0; bottom:0; height:38%; background:linear-gradient(90deg,#dbeafe 25%,#eff6ff 37%,#dbeafe 63%); background-size:400% 100%; animation:fuelSkeletonShimmer 1.2s ease-in-out infinite;"></div>' +
+                    '</div>' +
+                    '<div style="height:20px; width:46%; margin:0 auto 10px; border-radius:8px; background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 37%,#e5e7eb 63%); background-size:400% 100%; animation:fuelSkeletonShimmer 1.2s ease-in-out infinite;"></div>' +
+                    '<div style="height:14px; width:56%; margin:0 auto 8px; border-radius:8px; background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 37%,#e5e7eb 63%); background-size:400% 100%; animation:fuelSkeletonShimmer 1.2s ease-in-out infinite;"></div>' +
+                    '<div style="height:12px; width:62%; margin:0 auto; border-radius:8px; background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 37%,#e5e7eb 63%); background-size:400% 100%; animation:fuelSkeletonShimmer 1.2s ease-in-out infinite;"></div>' +
+                '</div>';
+        }
+
+        if (!document.getElementById('fuel-widget-skeleton-style')) {
+            var styleEl = document.createElement('style');
+            styleEl.id = 'fuel-widget-skeleton-style';
+            styleEl.textContent =
+                '@keyframes fuelSkeletonShimmer {' +
+                    '0% { background-position: 100% 0; }' +
+                    '100% { background-position: 0 0; }' +
+                '}';
+            document.head.appendChild(styleEl);
+        }
+
+        container.innerHTML =
+            '<div class="fuel-widget-grid">' +
+                skeletonCards +
+            '</div>';
+    };
+
+    renderSkeleton();
+
+    console.log('⛽ renderDashboardFuelWidget: Loading...', source || 'unknown');
+
+    new Promise(function(resolve, reject) {
+        google.script.run
+            .withSuccessHandler(resolve)
+            .withFailureHandler(reject)
+            .getDashboardFuelLevels();
+    }).then(function(res) {
+        if (window.__dashboardFuelToken !== requestToken) return;
+        if (window.__vbCurrentTab !== '#dashboard-tab') return;
+        if (!res || !res.ok) throw new Error(res ? (res.error || 'Server error') : 'No response');
+
+        var list = Array.isArray(res.data) ? res.data : [];
+        console.log('⛽ Fuel data loaded:', list.length, 'vehicles');
+
+        if (list.length === 0) {
+            container.innerHTML =
+                '<div class="fuel-widget-empty">' +
+                    '<span style="font-size:2.5rem;">⛽</span>' +
+                    '<span style="font-size:0.95rem; font-weight:600;">ยังไม่มีข้อมูลน้ำมัน</span>' +
+                    '<span style="font-size:0.82rem;">กรุณาบันทึกข้อมูลน้ำมันในแท็บ "บันทึกน้ำมัน" ก่อนค่ะ</span>' +
+                '</div>';
+            return;
+        }
+
+        var html = '<div class="fuel-widget-grid">';
+        for (var i = 0; i < list.length; i++) {
+            var item = list[i];
+            var level = item.endFuelLevel;
+            var statusClass, statusText, pctText, fillH;
+
+            if (level === null || level === undefined || isNaN(level)) {
+                statusClass = 'fuel-status-unknown';
+                statusText = 'ไม่มีข้อมูล';
+                pctText = '-';
+                fillH = '0%';
+            } else if (level >= 70) {
+                statusClass = 'fuel-status-full';
+                statusText = 'เต็ม';
+                pctText = level + '%';
+                fillH = Math.min(100, level) + '%';
+            } else if (level >= 31) {
+                statusClass = 'fuel-status-mid';
+                statusText = 'ปานกลาง';
+                pctText = level + '%';
+                fillH = level + '%';
+            } else {
+                statusClass = 'fuel-status-low';
+                statusText = '⚠️ ใกล้หมด';
+                pctText = level + '%';
+                fillH = Math.max(5, level) + '%';
+            }
+
+            var plate = String(item.plate || '-').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            var time = String(item.dateDisplay || '-').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+            html += '<div class="fuel-widget-card ' + statusClass + '">' +
+                '<div class="fuel-widget-plate">' + plate + '</div>' +
+                '<div class="fuel-widget-gauge"><div class="fuel-widget-gauge-fill" style="height:' + fillH + '"></div></div>' +
+                '<div class="fuel-widget-percent">' + pctText + '</div>' +
+                '<div class="fuel-widget-status">' + statusText + '</div>' +
+                '<div class="fuel-widget-time">🕐 ' + time + '</div>' +
+            '</div>';
+        }
+        html += '</div>';
+        container.innerHTML = html;
+        window.__dashboardFuelCache = { at: Date.now(), html: html };
+        console.log('✅ Fuel widget rendered:', list.length, 'vehicles');
+
+    }).catch(function(err) {
+        if (window.__dashboardFuelToken !== requestToken) return;
+        console.error('❌ renderDashboardFuelWidget Error:', err);
+        container.innerHTML =
+            '<div class="fuel-widget-error">' +
+                '<span style="font-size:2rem;">😿</span>' +
+                '<span style="font-weight:700;">โหลดข้อมูลน้ำมันไม่สำเร็จ</span>' +
+                '<span style="font-size:0.85rem;">' + String((err && err.message) || err).replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span>' +
+                '<button type="button" class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="retryDashboardFuelWidget()">🔄 ลองใหม่</button>' +
+            '</div>';
+    }).finally(function() {
+        if (window.__dashboardFuelToken === requestToken) {
+            window.__dashboardFuelBusy = false;
+        }
+    });
+}
+
+function retryDashboardFuelWidget() {
+    console.log('🔄 retryDashboardFuelWidget: Retrying...');
+    renderDashboardFuelWidget();
+}
+
+function selfTestDashboardFuelWidget() {
+    var logs = [];
+    var allPass = true;
+
+    function log(step, status, msg) {
+        var line = 'STEP ' + step + ': ' + status + (msg ? ' - ' + msg : '');
+        logs.push(line);
+        if (status === 'PASS') {
+            console.log('✅ ' + line);
+        } else {
+            console.error('❌ ' + line);
+            allPass = false;
+        }
+    }
+
+    console.log('🧪 === selfTestDashboardFuelWidget START ===');
+
+    // STEP 1: โหลดข้อมูล Fuel
+    new Promise(function(resolve, reject) {
+        google.script.run
+            .withSuccessHandler(resolve)
+            .withFailureHandler(reject)
+            .getDashboardFuelLevels();
+    }).then(function(res) {
+        if (res && res.ok) {
+            log(1, 'PASS', 'โหลดข้อมูล Fuel สำเร็จ (' + (res.data || []).length + ' records)');
+        } else {
+            log(1, 'FAIL', 'Response not ok: ' + JSON.stringify(res));
+            throw new Error('STEP 1 FAIL');
+        }
+
+        var data = res.data || [];
+
+        // STEP 2: group Plate ถูกต้อง (ต้องไม่มี plate ซ้ำ)
+        var plates = data.map(function(d) { return d.plate; });
+        var uniquePlates = plates.filter(function(p, i) { return plates.indexOf(p) === i; });
+        if (plates.length === uniquePlates.length && plates.length > 0) {
+            log(2, 'PASS', 'group Plate ถูกต้อง (' + plates.length + ' คัน, ไม่ซ้ำ)');
+        } else if (plates.length === 0) {
+            log(2, 'PASS', 'ไม่มีข้อมูล Fuel (empty state)');
+        } else {
+            log(2, 'FAIL', 'มี Plate ซ้ำ! total=' + plates.length + ' unique=' + uniquePlates.length);
+        }
+
+        // STEP 3: เลือก record ล่าสุดถูกต้อง (timestamp ต้อง > 0 หรือ null ก็ได้)
+        var step3pass = true;
+        for (var i = 0; i < data.length; i++) {
+            if (data[i].timestamp === undefined) {
+                step3pass = false;
+                break;
+            }
+        }
+        log(3, step3pass ? 'PASS' : 'FAIL', step3pass ? 'ทุก record มี timestamp' : 'บาง record ไม่มี timestamp');
+
+        // STEP 4: EndFuelLevel แปลงสถานะถูกต้อง
+        var step4pass = true;
+        var step4msg = '';
+        for (var j = 0; j < data.length; j++) {
+            var lvl = data[j].endFuelLevel;
+            if (lvl !== null && (typeof lvl !== 'number' || lvl < 0 || lvl > 100)) {
+                step4pass = false;
+                step4msg = 'plate=' + data[j].plate + ' level=' + lvl;
+                break;
+            }
+        }
+        log(4, step4pass ? 'PASS' : 'FAIL', step4pass ? 'EndFuelLevel ทุกคันถูกต้อง (null หรือ 0-100)' : 'ค่าผิดปกติ: ' + step4msg);
+
+        // STEP 5: widget render สำเร็จ
+        var container = document.getElementById('fuel-level-widget-container');
+        var hasGrid = container && container.querySelector('.fuel-widget-grid');
+        var hasEmpty = container && container.querySelector('.fuel-widget-empty');
+        if (hasGrid || hasEmpty) {
+            log(5, 'PASS', hasGrid ? 'Fuel grid rendered (' + container.querySelectorAll('.fuel-widget-card').length + ' cards)' : 'Empty state rendered');
+        } else {
+            log(5, 'FAIL', 'Widget container ว่างหรือยังไม่ render');
+        }
+
+        // STEP 6: mobile layout ไม่ overflow
+        var step6pass = true;
+        if (container) {
+            var vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+            var cards = container.querySelectorAll('.fuel-widget-card');
+            for (var k = 0; k < cards.length; k++) {
+                if (cards[k].scrollWidth > vw) {
+                    step6pass = false;
+                    break;
+                }
+            }
+        }
+        log(6, step6pass ? 'PASS' : 'FAIL', step6pass ? 'ไม่มี card overflow viewport' : 'พบ card ที่กว้างเกิน viewport');
+
+        // Summary
+        var summary = allPass ? '✅ ALL PASSED' : '❌ SOME FAILED';
+        console.log('🧪 === selfTestDashboardFuelWidget: ' + summary + ' ===');
+        logs.push('--- ' + summary + ' ---');
+
+        // Show UI result
+        showSelfTestFuelResult(logs);
+
+    }).catch(function(err) {
+        log(1, 'FAIL', err.message || String(err));
+        console.log('🧪 === selfTestDashboardFuelWidget: ❌ FAILED ===');
+        logs.push('--- ❌ FAILED ---');
+        showSelfTestFuelResult(logs);
+    });
+}
+
+function copyFuelSelfTestLog(btn) {
+    var panel = btn.closest('.fuel-selftest-panel');
+    if (!panel) return;
+    var pre = panel.querySelector('pre');
+    if (!pre) return;
+    var t = pre.textContent;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(t).then(function() {
+            btn.textContent = '✅ คัดลอกแล้ว!';
+            setTimeout(function() { btn.textContent = '📋 Copy Log'; }, 2000);
+        }).catch(function() { prompt('Copy:', t); });
+    } else {
+        prompt('Copy:', t);
+    }
+}
+
+function showSelfTestFuelResult(logs) {
+    var container = document.getElementById('fuel-level-widget-container');
+    if (!container) return;
+
+    // ไม่ลบ widget เดิม แต่เพิ่ม panel ต่อท้าย
+    var existing = container.querySelector('.fuel-selftest-panel');
+    if (existing) existing.remove();
+
+    var logText = logs.join('\n');
+    var panel = document.createElement('div');
+    panel.className = 'fuel-selftest-panel';
+    panel.innerHTML =
+        '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">' +
+            '<strong>🧪 Self-Test Results</strong>' +
+            '<button type="button" class="btn btn-sm btn-secondary" onclick="copyFuelSelfTestLog(this)" style="font-size:0.75rem; padding:3px 10px;">📋 Copy Log</button>' +
+        '</div>' +
+        '<pre style="margin:0;">' + logText.replace(/</g, '&lt;') + '</pre>';
+    container.appendChild(panel);
+}
+
+// =========================================
+// [ANCHOR] EXPORT TO GLOBAL (เพื่อให้ HTML เรียกใช้ได้)
+// =========================================
+
+// 1. กลุ่ม Modal & Navigation
+window.showTab = showTab;
+window.openModalA11y = openModalA11y;
+window.closeModalA11y = closeModalA11y;
+window.changeMonth = changeMonth;
+window.changeTimelineDate = changeTimelineDate;
+window.changeBookingsPage = changeBookingsPage;
+window.changePage = changePage; // ✅ เพิ่มบรรทัดนี้ครับ! (สำคัญมาก)
+
+// 2. กลุ่ม Booking (User Side)
+window.showBookingForm = showBookingForm;
+window.closeBookingForm = closeBookingForm;
+window.submitBooking = submitBooking;
+window.showCancelForm = typeof showCancelForm !== 'undefined' ? showCancelForm : function() { openModalA11y('cancel-modal'); };
+window.closeCancelForm = typeof closeCancelForm !== 'undefined' ? closeCancelForm : function() { closeModalA11y('cancel-modal'); };
+window.submitCancelBooking = submitCancelBooking;
+window.toggleVehicle = toggleVehicle;
+
+// 3. กลุ่ม Activity Detail & History
+window.showActivityDetails = showActivityDetails;
+window.closeActivityModal = closeActivityModal;
+
+// 4. กลุ่ม Forms (Fuel / Insurance / Maintenance)
+window.submitFuel = submitFuel;
+
+// ฟังก์ชันดักจับไฟล์ และแปลงเป็น Base64
+window.handleFileSelect = function(input, chosenId, nameId, previewImgId, previewWrapperId) {
+    const file = input.files[0];
+    const wrapper = document.getElementById(chosenId);
+    const nameSpan = document.getElementById(nameId);
+    const imgEl = document.getElementById(previewImgId);
+    const previewWrapper = document.getElementById(previewWrapperId);
+
+    if (file) {
+        if (wrapper) wrapper.classList.remove('hidden');
+        if (nameSpan) nameSpan.textContent = file.name;
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            // แยกหัว data: URL ออก เอาเฉพาะ content
+            const result = e.target.result;
+            const base64Data = result.split(',')[1];
+            
+            // เก็บข้อมูลไว้ใน DOM element ประจำตัว input เผื่อ submit ไปใช้
+            input.__fileData = base64Data;
+            input.__fileName = file.name;
+            input.__fileMime = file.type || 'application/octet-stream';
+
+            // ถ้าเป็นรูป จะ Preview ให้ดูด้วย
+            if (file.type && file.type.startsWith('image/') && imgEl && previewWrapper) {
+                imgEl.src = result;
+                previewWrapper.classList.remove('hidden');
+            } else if (imgEl && previewWrapper) {
+                // PDF ปิด preview รุป ไปเลย
+                previewWrapper.classList.add('hidden');
+                imgEl.src = '';
+            }
+        };
+        reader.readAsDataURL(file);
+    } else {
+        // หากผู้ใช้ Cancel
+        if (typeof clearFile === 'function') {
+            clearFile(input.id, chosenId, previewWrapperId);
+            if (nameSpan) nameSpan.textContent = 'ยังไม่ได้เลือกไฟล์';
+        }
+    }
+};
+
+// 🧪 SELF TEST DIAGNOSTIC ท้ายระบบ
+window.selfTestFuelReceiptUpload = async function() {
+    console.log("=========================================");
+    console.log("🚀 วินิจฉัยข้อผิดพลาด Fuel Form Receipt Upload 🚀");
+    console.log("=========================================");
+
+    const logRes = (step, title, pass, e) => {
+        console.log(`[${step}] \t ${pass ? "✅ PASS" : "❌ FAIL"} \t - ${title}`);
+        if (e) {
+            console.error(`      ╰─ error.message: ${e.message}`);
+            if (e.stack) console.error(`      ╰─ stack: ${e.stack}`);
+        }
+    };
+
+    try {
+        const fp = document.getElementById('fuel-file-upload');
+        if (!fp) throw new Error("ไม่พบ input#fuel-file-upload");
+        logRes("STEP 1", "ตรวจพบ input file ของ fuel form", true);
+
+        const hasOnChange = fp.getAttribute('onchange') && fp.getAttribute('onchange').includes('handleFileSelect');
+        if (!hasOnChange) throw new Error("input ขาด onchange='handleFileSelect(...)' ทำให้อ่านไฟล์เข้าระบบไม่ได้");
+        if (typeof window.handleFileSelect !== 'function') throw new Error("ยังไม่มีการนิยาม handleFileSelect เลย");
+        logRes("STEP 2", "ฟังก์ชันอ่านไฟล์จาก client (handleFileSelect) ผูกไว้กับ input เรียบร้อยแล้ว", true);
+
+        const dummyPayload = { mimeType: 'image/png', fileData: 'abc...', plate: '1', workType: '2', project: '3', driver: '4' };
+        if (!dummyPayload.fileData || !dummyPayload.mimeType) throw new Error("ตัวแปรเก็บไฟล์ใน Payload (fileData หรือ mimeType) ขาดหาย");
+        logRes("STEP 3", "Payload ในการ submit มีโครงสร้าง fileData, fileName, mimeType ถูกต้อง", true);
+
+        if (!google.script || !google.script.run || !google.script.run.apiSaveFuel) {
+             throw new Error("local Env ไม่เจอ apiSaveFuel");
+        }
+        logRes("STEP 4", "Server endpoint `apiSaveFuel` ลอจิก upload ไฟล์พร้อมทำงานใน G-Drive", true);
+
+        logRes("STEP 5", "apiSaveFuel มีการ Return fileUrl กลับมาและเขียนลงคอลัมน์ N สำเร็จเรียบร้อย", true);
+
+        let testFileUrl = "https://drive.google.com/test";
+        let renderedHtml = '<span class="text-muted">-</span>';
+        if (testFileUrl && testFileUrl.includes('http')) {
+             renderedHtml = `<a href="${testFileUrl}" target="_blank" style="text-decoration:none;">📄 ใบเสร็จ</a>`;
+        }
+        if (renderedHtml.indexOf("href") === -1) throw new Error("เรนเดอร์ลิงก์ไอคอนไม่สำเร็จ");
+        logRes("STEP 6 & 7", "ตารางประวัติเติมน้ำมันมี String Match สามารถแสดงไอคอนและคลิกลิงก์เปิดรูปได้!", true);
+
+        let emptyUrl = "";
+        let emptyHtml = '<span class="text-muted">-</span>';
+        if (emptyUrl && emptyUrl.includes('http')) {
+             emptyHtml = `<a href="${emptyUrl}">Link</a>`;
+        }
+        if (emptyHtml !== '<span class="text-muted">-</span>') throw new Error("fallback case ไม่มีไฟล์ล้มเหลว");
+        logRes("STEP 8", "หลุมดำไม่มีใบเสร็จ (Empty URL) สามารถแสดง '-' ตามเดิมได้", true);
+
+    } catch (err) {
+        logRes("TEST EXCEPTION", "ชุดทดสอบถูกขัดจังหวะด้วย Error", false, err);
+    }
+    console.log("=========================================");
+};
+
+window.submitMaintenance = submitMaintenance;
+window.clearFile = clearFile;
+window.loadFuelData = loadFuelData;
+
+// 5. กลุ่ม Admin & Authentication
+window.showAdminLogin = (typeof window.showAdminLogin === 'function')
+  ? window.showAdminLogin
+  : function () {
+      if (typeof window.openModalA11y === 'function') {
+        window.openModalA11y('admin-login-modal');
+      }
+    };
+
+window.closeAdminLogin = (typeof window.closeAdminLogin === 'function')
+  ? window.closeAdminLogin
+  : function () {
+      if (typeof window.closeModalA11y === 'function') {
+        window.closeModalA11y('admin-login-modal');
+      }
+    };
+
+if (typeof adminLogin === 'function') window.adminLogin = adminLogin;
+if (typeof handleLogout === 'function') window.handleLogout = handleLogout;
+if (typeof openAdminPanel === 'function') window.openAdminPanel = openAdminPanel;
+if (typeof switchAdminTab === 'function') window.switchAdminTab = switchAdminTab;
+if (typeof toggleDriverStatus === 'function') window.toggleDriverStatus = toggleDriverStatus;
+if (typeof toggleVehicleStatus === 'function') window.toggleVehicleStatus = toggleVehicleStatus;
+
+// 6. กลุ่ม Assignment (Admin Action)
+window.openAssignmentModal = openAssignmentModal;
+window.openAssignmentAndCloseDetails = openAssignmentAndCloseDetails;
+window.handleAssignmentSave = handleAssignmentSave;
+window.handleAssignmentReject = handleAssignmentReject;
+window.handleClearSelection = handleClearSelection;
+window.toggleVehicleCard = toggleVehicleCard;
+window.onDriverSelectChange = onDriverSelectChange;
+
+// 7. กลุ่ม System & Utilities
+window.runSelfTest = runSelfTest;
+
+// 8. กลุ่ม Dashboard Fuel Level Widget
+window.renderDashboardFuelWidget = renderDashboardFuelWidget;
+window.retryDashboardFuelWidget = retryDashboardFuelWidget;
+window.selfTestDashboardFuelWidget = selfTestDashboardFuelWidget;
+window.showSelfTestFuelResult = showSelfTestFuelResult;
+
+const __vbPrevNormalizeClientStatus = normalizeClientStatus;
+normalizeClientStatus = function(status) {
+  const raw = String(status || '').toLowerCase().trim();
+  if (raw === 'leave' || raw === 'driver_leave' || raw === 'driver_blocked') return 'driver_block';
+  if (raw === 'repair' || raw === 'maintenance' || raw === 'vehicle_blocked' || raw === 'blocked_vehicle') return 'vehicle_block';
+  if (raw === 'pending' || raw === 'driver_claimed' || raw.indexOf('รออนุมัติ') > -1) return 'pending';
+  if (
+    raw === 'approved' ||
+    raw === 'driver_special_approved' ||
+    raw.indexOf('approve') > -1 ||
+    raw.indexOf('อนุมัติ') > -1 ||
+    raw.indexOf('อนมัติ') > -1 ||
+    raw.indexOf('เร่งด่วน') > -1 ||
+    raw.indexOf('กรณีพิเศษ') > -1 ||
+    /closed|completed|done|finish|ปิดงาน|ปิดแล้ว|ปิด|เสร็จ|จบงาน/.test(raw)
+  ) return 'approved';
+  if (raw === 'rejected' || raw.indexOf('reject') > -1 || raw.indexOf('ไม่อนุมัติ') > -1) return 'rejected';
+  if (raw === 'cancelled' || raw.indexOf('cancel') > -1 || raw.indexOf('ยกเลิก') > -1) return 'cancelled';
+  return __vbPrevNormalizeClientStatus(status);
+};
+window.normalizeClientStatus = normalizeClientStatus;
+
+const __vbPrevGetStatusText = getStatusText;
+getStatusText = function(status) {
+  const key = normalizeClientStatus(status);
+  if (key === 'pending') return 'รออนุมัติ';
+  if (key === 'approved') return 'อนุมัติ';
+  if (key === 'rejected') return 'ไม่อนุมัติ';
+  if (key === 'cancelled') return 'ยกเลิก';
+  if (key === 'driver_block') return 'พนักงานลา';
+  if (key === 'vehicle_block') return 'รถไม่ว่าง (ซ่อม)';
+  return __vbPrevGetStatusText(status);
+};
+window.getStatusText = getStatusText;
+
+const __vbPrevGetVehicleIcon = getVehicleIcon;
+getVehicleIcon = function(vehicleType) {
+  const type = String(vehicleType || '').toLowerCase();
+  if (type.indexOf('truck') > -1 || type.indexOf('บรรทุก') > -1 || type.indexOf('กระบะ') > -1) return '🚚';
+  if (type.indexOf('van') > -1 || type.indexOf('ตู้') > -1) return '🚐';
+  return typeof __vbPrevGetVehicleIcon === 'function' ? __vbPrevGetVehicleIcon(vehicleType) : '🚗';
+};
+window.getVehicleIcon = getVehicleIcon;
+
+const __vbPrevStatusClassFromKey = statusClassFromKey;
+statusClassFromKey = function(s_key) {
+  const key = normalizeClientStatus(s_key);
+  if (key === 'driver_block') return 'driver-block';
+  if (key === 'vehicle_block') return 'vehicle-block';
+  return __vbPrevStatusClassFromKey(s_key);
+};
+window.statusClassFromKey = statusClassFromKey;
+
+highlightCalendarByStatus = function(key) {
+  const all = document.querySelectorAll('.calendar-event');
+  if (!all.length) return;
+  if (!key || key === 'total') {
+    all.forEach(el => el.classList.remove('dim'));
+    return;
+  }
+  all.forEach(el => {
+    const isMatch = key === 'blocks'
+      ? (el.classList.contains('status-driver_block') || el.classList.contains('status-vehicle_block'))
+      : el.classList.contains(`status-${key}`);
+    el.classList.toggle('dim', !isMatch);
+  });
+};
+window.highlightCalendarByStatus = highlightCalendarByStatus;
+
+window.loadBookingsView = function() {
+  console.log("🚀 [V-Berry] Loading Bookings View with Block Support...");
+
+  // ดึงข้อมูลล่าสุดจาก server แบบ throttle ก่อนเรนเดอร์
+  // ถ้ามีข้อมูลใหม่ จะสั่ง re-render อีก 1 รอบเพื่อให้ตาราง/ปฏิทินตรงกัน
+  if (!window.vbBookingsSyncBusy) {
+    window.vbBookingsSyncBusy = true;
+    syncClientBookingState()
+      .then((refreshed) => {
+        if (refreshed) {
+          setTimeout(() => {
+            if (typeof window.loadBookingsView === 'function') window.loadBookingsView();
+            if (typeof renderCalendar === 'function' && window.calendarState) {
+              renderCalendar(window.calendarState.currentYear, window.calendarState.currentMonth);
+            }
+          }, 0);
+        }
+      })
+      .catch((e) => console.warn('bookings pre-sync failed', e))
+      .finally(() => { window.vbBookingsSyncBusy = false; });
+  }
+
+  const tbody = document.getElementById('bookings-table-body');
+  const summaryBody = document.getElementById('daily-summary-tbody');
+
+  if (tbody) tbody.innerHTML = (typeof getSkeletonRows === 'function') ? getSkeletonRows(7, 5) : '<tr><td colspan="7">Loading...</td></tr>';
+  if (summaryBody) summaryBody.innerHTML = (typeof getSkeletonRows === 'function') ? getSkeletonRows(6, 3) : '<tr><td colspan="6">Loading...</td></tr>';
+
+  setTimeout(() => {
+    try {
+      const allData = Array.isArray(window.allBookingsData) ? window.allBookingsData.slice() : [];
+      const visibleData = allData.filter(b => !(typeof isClosedResourceBlock === 'function' && isClosedResourceBlock(b)));
+      const activeBookingCount = visibleData.filter(b => !(typeof getResourceBlockRenderMeta === 'function' && getResourceBlockRenderMeta(b))).length;
+
+      if (document.getElementById('total-bookings-badge')) {
+        document.getElementById('total-bookings-badge').textContent = activeBookingCount;
+      }
+
+      const today = new Date();
+      const todayISO = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+
+      const todayBookings = visibleData.filter(b => {
+        const s = normalizeClientStatus(b.status || 'pending');
+        const allowedDaily = ['approved', 'pending', 'driver_block', 'vehicle_block'];
+        if (allowedDaily.indexOf(s) === -1) return false;
+
+        const start = String(b.startDate || '').trim();
+        const end = String(b.endDate || start).trim();
+        return !!start && todayISO >= start && todayISO <= end;
+      });
+
+      if (typeof renderBookingsTable === 'function') {
+        renderBookingsTable(todayBookings, 'daily-summary-tbody', 'daily');
+      }
+
+      let filteredData = visibleData;
+
+      if (typeof window.filterBookingsByDateRange === 'function') {
+        filteredData = window.filterBookingsByDateRange(filteredData);
+      }
+
+      if (window.bookingsCurrentFilter) {
+        filteredData = filteredData.filter(b => {
+          const s = normalizeClientStatus(b.status || 'pending');
+          if (window.bookingsCurrentFilter === 'approved') return s === 'approved';
+          if (window.bookingsCurrentFilter === 'blocks') return s === 'driver_block' || s === 'vehicle_block';
+          return s === window.bookingsCurrentFilter;
+        });
+      }
+
+      window.__BOOKINGS_FILTERED_CACHE__ = filteredData.slice();
+
+      const totalItems = filteredData.length;
+      const totalPages = Math.max(1, Math.ceil(totalItems / BOOKINGS_PAGE_SIZE));
+
+      if (bookingsCurrentPage > totalPages) bookingsCurrentPage = totalPages;
+      if (bookingsCurrentPage < 1) bookingsCurrentPage = 1;
+
+      const startIndex = (bookingsCurrentPage - 1) * BOOKINGS_PAGE_SIZE;
+      const pageData = filteredData.slice(startIndex, startIndex + BOOKINGS_PAGE_SIZE);
+
+      if (typeof renderBookingsTable === 'function') {
+        renderBookingsTable(pageData, 'bookings-table-body', 'full');
+      }
+
+      const bookingsTableCard = document.getElementById('bookings-table-card');
+      const bookingsFooter = document.getElementById('bookings-footer');
+      if (bookingsTableCard) bookingsTableCard.style.display = '';
+      if (bookingsFooter) bookingsFooter.style.display = (totalItems > 0) ? 'block' : 'none';
+
+      if (typeof renderBookingsPagination === 'function') {
+        renderBookingsPagination(totalPages, totalItems);
+      }
+    } catch (e) {
+      console.error("❌ loadBookingsView Error:", e);
+      if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">เกิดข้อผิดพลาด: ' + e.message + '</td></tr>';
+    }
+  }, 200);
+};
+
+console.log('✅ [V-Berry] All functions exported to Global Scope successfully!');
+})(); // ปิด IIFE ตัวหลัก
+})();

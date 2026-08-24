@@ -429,26 +429,32 @@ function getMainData() {
 // ANCHOR: getMainData_
 function getMainData_(options) {
   options = options || {};
+  const totalStart = Date.now();
   const CK = INITIAL_DATA_CACHE_KEY; 
   const forceRefresh = options.forceRefresh === true || options.skipCache === true;
   
+  const cacheReadStart = Date.now();
   const cached = forceRefresh ? null : cacheGetLarge_(CK);
+  const cacheReadTime = Date.now() - cacheReadStart;
   
   if (cached) {
-    Logger.log('CACHE HIT key=' + CK);
+    Logger.log('CACHE HIT key=' + CK + ' readMs=' + cacheReadTime + ' totalMs=' + (Date.now() - totalStart));
+    Logger.log('[Timing] Cache Read Hit: ' + cacheReadTime + ' ms (total: ' + (Date.now() - totalStart) + ' ms)');
     if (cached && typeof cached === 'object' && cached.ok === true && cached.data) {
-      return {
-        ok: true,
-        data: cached.data
-      };
+      return cached;
     }
-    return { ok: true, data: cached };
+    return { ok:true, data:cached };
   }
-  Logger.log('CACHE MISS key=' + CK + (forceRefresh ? ' reason=forceRefresh' : ''));
+  Logger.log('CACHE MISS key=' + CK + (forceRefresh ? ' reason=forceRefresh' : '') + ' readMs=' + cacheReadTime);
+  Logger.log('[Timing] Cache Read Miss: ' + cacheReadTime + ' ms');
   
   try {
+    const settingsStart = Date.now();
     const settings = readAllSettings_();
+    const settingsTime = Date.now() - settingsStart;
+    Logger.log('[Timing] Read Settings Sheet: ' + settingsTime + ' ms');
 
+    const sheetReadStart = Date.now();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sh = ss.getSheetByName(SHEET_MAIN_NAME); 
     if (!sh) throw new Error("ไม่พบชีต 'Data' ค่ะ!");
@@ -496,10 +502,16 @@ function getMainData_(options) {
       }
     }
     const idx = headerIndex_(headers);
+    const sheetReadTime = Date.now() - sheetReadStart;
+    Logger.log('[Timing] Read Sheets (Data): ' + sheetReadTime + ' ms');
     
     // 🍓 BERRY FIX: อ่าน Actual Ends Map ก่อน Map Bookings (แก้เป็น getActualEndsMap ไม่มี _)
+    const actualEndStart = Date.now();
     const actualEndsMap = getActualEndsMap();
+    const actualEndTime = Date.now() - actualEndStart;
+    Logger.log('[Timing] Read Sheets (BookingActualEnd): ' + actualEndTime + ' ms');
 
+    const buildBookingsStart = Date.now();
     const seen = new Set(); 
     const startRow = 2; // Data rows start at row 2 (row 1 is header)
     const recentBookingsData = values.map((row, i) => {
@@ -567,8 +579,11 @@ function getMainData_(options) {
       const bNum = parseInt(b.bookingId) || 0;
       return bNum - aNum; 
     });
+    const buildBookingsTime = Date.now() - buildBookingsStart;
+    Logger.log('[Timing] Build Bookings (normalize/sort): ' + buildBookingsTime + ' ms');
 
     // 🍓 [BERRY FIX] Merge Availability Blocks into Calendar (Data UI Safe)
+    const buildCalendarStart = Date.now();
     try {
        const shAvail = ss.getSheetByName('Availability');
        if(shAvail) {
@@ -578,6 +593,7 @@ function getMainData_(options) {
           const availSheetNameA1 = "'" + String(shAvail.getName()).replace(/'/g, "''") + "'";
           const availRangeA1 = availSheetNameA1 + '!A1:' + toA1Col_(availLastCol) + availLastRow;
           let avData = [];
+          const availReadStart = Date.now();
           try {
             const availResp = Sheets.Spreadsheets.Values.get(spreadsheetId, availRangeA1, {
               majorDimension: 'ROWS',
@@ -589,6 +605,7 @@ function getMainData_(options) {
             Logger.log('getMainData_ Availability read fallback to getValues: ' + (sheetApiErr && sheetApiErr.message ? sheetApiErr.message : sheetApiErr));
             avData = shAvail.getRange(1, 1, availLastRow, availLastCol).getValues();
           }
+          Logger.log('[Timing] Read Sheets (Availability): ' + (Date.now() - availReadStart) + ' ms');
 
           const header = avData[0] ||[];
           const col_assignedDriver = header.indexOf('assignedDriver');
@@ -689,21 +706,32 @@ function getMainData_(options) {
     } catch(ex) {
        Logger.log("Availability Merge Error: " + ex.message + "\nstack: " + ex.stack);
     }
+    const buildCalendarTime = Date.now() - buildCalendarStart;
+    Logger.log('[Timing] Build Calendar (Availability processing): ' + buildCalendarTime + ' ms');
 
+    const buildDriversStart = Date.now();
     const driversRes = getDriversFromAdmin_(settings);
     const drivers = (driversRes.ok && Array.isArray(driversRes.drivers)) ? driversRes.drivers :[];
+    const buildDriversTime = Date.now() - buildDriversStart;
+    Logger.log('[Timing] Build Drivers (Admin sheet): ' + buildDriversTime + ' ms');
     
+    const buildVehiclesStart = Date.now();
     const platesRes = getAllVehiclePlatesFromSettings(settings);
     const vehicles  = platesRes.ok ? {
       vans: platesRes.vans ||[],
       trucks: platesRes.trucks ||[],
       all: platesRes.all ||[]
     } : { vans:[], trucks: [], all:[] };
+    const buildVehiclesTime = Date.now() - buildVehiclesStart;
+    Logger.log('[Timing] Build Vehicles (Vehicles sheet): ' + buildVehiclesTime + ' ms');
     
+    const buildDashboardStart = Date.now();
     // ดึงรายชื่อโครงการที่ไม่ซ้ำมาทำ Auto-complete (ใช้อิงจาก workName)
     const projects = Array.from(new Set(sortedBookings
       .map(r => String(r.workName || '').trim())
       .filter(Boolean)));
+    const buildDashboardTime = Date.now() - buildDashboardStart;
+    Logger.log('[Timing] Build Dashboard (Projects list): ' + buildDashboardTime + ' ms');
       
     const payload = {
       ok: true,
@@ -719,7 +747,12 @@ function getMainData_(options) {
       }
     };
     
+    const cacheWriteStart = Date.now();
     cachePutLarge_(CK, payload, CACHE_SEC || 120); 
+    const cacheWriteTime = Date.now() - cacheWriteStart;
+    Logger.log('[Timing] Cache Write: ' + cacheWriteTime + ' ms');
+    
+    Logger.log('[Timing] Total Time (Cache Miss): ' + (Date.now() - totalStart) + ' ms');
     return payload;
     
   } catch (e) {
@@ -951,13 +984,6 @@ function selfTestSheetDateTextForCell() {
 }
 
 function createBookingAndBroadcast(payload) {
-  const rawWorkType = String(payload.workType || payload.jobType || '').trim();
-  const customWorkType = String(payload.workTypeOther || '').trim();
-
-  if (rawWorkType === 'อื่นๆ' && !customWorkType) {
-    return { ok: false, error: 'กรุณาระบุประเภทงานอื่นๆ' };
-  }
-
   const cache = CacheService.getScriptCache();
   const sigBase = String(payload.name) + String(payload.startDate) + String(payload.startTime) + String(payload.workName || payload.projectName || payload.project || '');
   const signature = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, sigBase));
@@ -982,7 +1008,7 @@ function createBookingAndBroadcast(payload) {
     const setV = (key, val) => { if (idx[key] !== undefined && idx[key] !== -1) rowData[idx[key]] = val; };
 
     // 🍓 [STEP 3] ใช้ Key ใหม่ workType และ workName
-    let workType = rawWorkType === 'อื่นๆ' ? customWorkType : rawWorkType;
+    let workType = String(payload.workType || payload.jobType || "").trim();
     let workName = String(payload.workName || payload.projectName || "").trim();
 
     const requestedCount = parseInt(payload.vehicleCount, 10) || 1;
@@ -3956,6 +3982,20 @@ function getById(bookingId) {
 }
 
 
+function normalizeStatusKey_(raw) {
+  var s = String(raw || '').trim().toLowerCase();
+
+  // รองรับ label / emoji
+  if (s.indexOf('อนุมัติ') >= 0 || s === 'approved') return 'approved';
+  if (s.indexOf('ไม่อนุมัติ') >= 0 || s.indexOf('reject') >= 0) return 'rejected';
+  if (s.indexOf('ยกเลิก') >= 0 || s.indexOf('cancel') >= 0) return 'cancelled';
+  if (s.indexOf('รอ') >= 0 || s.indexOf('pending') >= 0) return 'pending';
+
+  // key ตรง ๆ
+  if (s === 'pending' || s === 'approved' || s === 'rejected' || s === 'cancelled') return s;
+  return '';
+}
+
 function splitCsv_(text) {
   var s = String(text || '').trim();
   if (!s) return [];
@@ -4288,34 +4328,12 @@ function normalizeStatus_(raw) {
   return s;
 }
 
-/**
- * Sheets serial → local calendar Date for Asia/Bangkok (UTC+7, no DST).
- * Avoids Session.getScriptTimeZone / Utilities.formatDate on hot paths.
- */
-function sheetsSerialToLocalDate_(serial) {
-  var utcMs = Math.round((Number(serial) - 25569) * 86400 * 1000);
-  var bkk = new Date(utcMs + 7 * 3600 * 1000);
-  if (isNaN(bkk.getTime())) return null;
-  return new Date(bkk.getUTCFullYear(), bkk.getUTCMonth(), bkk.getUTCDate());
-}
-
-function formatLocalDateISO_(d) {
-  if (!d || isNaN(d.getTime())) return null;
-  var mm = d.getMonth() + 1;
-  var dd = d.getDate();
-  return d.getFullYear() + '-' + (mm < 10 ? '0' : '') + mm + '-' + (dd < 10 ? '0' : '') + dd;
-}
-
 function normalizeDateInputToDate_(v) {
+  var tz = Session.getScriptTimeZone() || 'Asia/Bangkok';
   if (v == null || v === '') return null;
 
   if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
     return new Date(v.getFullYear(), v.getMonth(), v.getDate());
-  }
-
-  // Hot path: Sheets SERIAL_NUMBER (number) — no Session / Utilities
-  if (typeof v === 'number' && isFinite(v)) {
-    return sheetsSerialToLocalDate_(v);
   }
 
   var raw = String(v).trim();
@@ -4324,7 +4342,13 @@ function normalizeDateInputToDate_(v) {
 
   var asNum = Number(raw);
   if (isFinite(asNum) && raw.match(/^\d+(\.\d+)?$/)) {
-    return sheetsSerialToLocalDate_(asNum);
+    var utcMs = Math.round((asNum - 25569) * 86400 * 1000);
+    var serialDate = new Date(utcMs);
+    if (!isNaN(serialDate.getTime())) {
+      var serialIso = Utilities.formatDate(serialDate, tz, 'yyyy-MM-dd');
+      var sp = serialIso.split('-');
+      return new Date(Number(sp[0]), Number(sp[1]) - 1, Number(sp[2]));
+    }
   }
 
   var mIso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -4362,18 +4386,13 @@ function normalizeDateInputToDate_(v) {
 /**
  * แปลงวันที่ทุกรูปแบบให้เป็น ISO AD (ค.ศ.) yyyy-MM-dd
  * [BERRY FIXED] แก้ปัญหาลบปีจนถอยไปยุคอยุธยา (1654)
- * [PERF] Avoid Session.getScriptTimeZone / Utilities.formatDate on hot path
  */
 function parseDateToISO_(v) {
   try {
-    if (typeof v === 'string') {
-      var s = String(v).trim();
-      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    }
-    if (typeof v === 'number' && isFinite(v)) {
-      return formatLocalDateISO_(sheetsSerialToLocalDate_(v));
-    }
-    return formatLocalDateISO_(normalizeDateInputToDate_(v));
+    var tz = Session.getScriptTimeZone() || 'Asia/Bangkok';
+    var d = normalizeDateInputToDate_(v);
+    if (!d || isNaN(d.getTime())) return null;
+    return Utilities.formatDate(d, tz, 'yyyy-MM-dd');
   } catch (e) {
     return null;
   }
@@ -7238,6 +7257,29 @@ function _getNextRow_(sh) {
   return sh.getLastRow() + 1;
 }
 
+// --- Helper 3: Save Base64 File (จำเป็นสำหรับ Maintenance) ---
+function _saveBase64File_(base64Data, filename) {
+  if (!base64Data || !filename) return null;
+  try {
+    var parts = base64Data.split(',');
+    var mimeType = parts[0].match(/:(.*?);/)[1];
+    var bytes = Utilities.base64Decode(parts[1]);
+    var blob = Utilities.newBlob(bytes, mimeType, filename);
+    
+    // หาโฟลเดอร์ (หรือสร้างใหม่ถ้าไม่มี)
+    var folders = DriveApp.getFoldersByName("V-Berry Uploads");
+    var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder("V-Berry Uploads");
+    folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    
+    var file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return file.getUrl();
+  } catch (e) {
+    Logger.log("Save File Error: " + e.message);
+    return "";
+  }
+}
+
 // 1. บันทึกข้อมูลประกันภัย (เพิ่ม LockService)
 function apiSaveInsurance(payload) {
   var lock = LockService.getScriptLock();
@@ -7690,6 +7732,29 @@ function apiSaveFuel(form) {
   }
 }
 
+function coerceTimeHHmm_(v) {
+  const tz = Session.getScriptTimeZone();
+  if (v == null || v === '') return '';
+
+  // Case 1: Date object
+  if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+    return Utilities.formatDate(v, tz, 'HH:mm');
+  }
+
+  // Case 2: number serial (Sheets time fraction)
+  if (typeof v === 'number') {
+    var d = new Date(1899, 11, 30);
+    d.setMilliseconds(v * 86400000);
+    return Utilities.formatDate(d, tz, 'HH:mm');
+  }
+
+  // Case 3: String
+  var s = String(v).trim();
+  if (s.match(/^\d{1,2}:\d{2}$/)) return s;
+  
+  return '';
+}
+
 function apiGetFuelHistory() {
   try {
     Logger.log("STEP8: ทดสอบ list/read ตารางย้อนหลังจาก schema ใหม่");
@@ -7898,6 +7963,43 @@ function _fmtThaiDateTime(d, tStr) {
   
   return (datePart + ' ' + timePart).trim();
 }
+
+// 1. ดึงประวัติประกันภัย
+function apiGetInsuranceHistory() {
+  try {
+    const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_INSURANCE);
+    if (!sh || sh.getLastRow() < 2) return { ok: true, data: [] };
+    
+    const vals = sh.getRange(2, 1, sh.getLastRow() - 1, 7).getValues();
+    const data = vals.map(r => ({
+      plate: String(r[1]),
+      company: String(r[2]),
+      endDate: _fmtThaiDateBE(r[5] ? new Date(r[5]) : null), // ใช้ Helper แปลง
+      status: calculateStatus_(r[5])
+    })).reverse();
+    
+    return { ok: true, data: data };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+// 2. ดึงประวัติซ่อมบำรุง
+function apiGetMaintenanceHistory() {
+  try {
+    const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_MAINTENANCE);
+    if (!sh || sh.getLastRow() < 2) return { ok: true, data: [] };
+    
+    const vals = sh.getRange(2, 1, sh.getLastRow() - 1, 4).getValues();
+    const data = vals.map(r => ({
+      date: _fmtThaiDateBE(r[0] ? new Date(r[0]) : null), // ใช้ Helper แปลง
+      plate: String(r[1]),
+      topic: String(r[2]),
+      cost: Number(r[3] || 0).toLocaleString()
+    })).reverse();
+    
+    return { ok: true, data: data };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 
 // Helper เล็กๆ สำหรับคำนวณสถานะประกัน
 function calculateStatus_(dateObj) {

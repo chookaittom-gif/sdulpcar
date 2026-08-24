@@ -26,3 +26,12 @@ README.md
 # Ignore clasp config files
 .clasp.json
 .claspignore
+
+# Avoid Apps Script name collision / client JS treated as server scripts
+# (rootDir is gas-deploy — match both repo-relative and rootDir-relative names)
+gas-deploy/gviz-service.js
+gas-deploy/app.js
+gas-deploy/config.js
+gviz-service.js
+app.js
+config.js
