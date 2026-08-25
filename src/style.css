@@ -1,3 +1,4 @@
+/* Hallmark · macrostructure: Status Calendar Cards · tone: precise SDU light · anchor hue: indigo */
 /* ==================== ROOT VARIABLES ==================== */
 :root {
   --primary: #667eea;
@@ -26,6 +27,26 @@
   --glass-border: rgba(255, 255, 255, 0.4);
   --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.08);
   --glass-blur: 12px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 160ms;
+
+  --calendar-event-approved: #16A34A;
+  --calendar-event-pending: #D97706;
+  --calendar-event-rejected: #DC2626;
+  --calendar-event-cancelled: #475569;
+  --calendar-event-driver-claimed: #0369A1;
+  --calendar-event-special: #5B21B6;
+  --calendar-event-driver-leave: #C2410C;
+  --calendar-event-driver-busy: #D97706;
+  --calendar-event-vehicle-repair: #7F1D1D;
+  --calendar-event-border: rgba(255, 255, 255, 0.3);
+  --calendar-event-chip-bg: rgba(255, 255, 255, 0.18);
+  --calendar-event-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
+  --calendar-more-bg: #EEF2FF;
+  --calendar-more-bg-hover: #E0E7FF;
+  --calendar-more-border: #C7D2FE;
+  --calendar-more-ink: #3730A3;
+  --radius-sm: 8px;
 
   /* ✅ SINGLE SOURCE: main container controls */
   --main-container-padding: 2rem 1rem;
@@ -413,7 +434,15 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tab-btn, .tab-content { transition: none !important; animation: none !important; }
+  .tab-btn, .tab-content,
+  #calendar-tab .card,
+  #calendar-tab .calendar-day,
+  #calendar-tab .calendar-event,
+  #calendar-tab .more-events-btn {
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
+  }
 }
 
 /* ==================== CONTAINER ==================== */
@@ -724,6 +753,13 @@ main.container {
 #calendar-tab .card {
   max-width: 100%;
   overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+#calendar-tab .card:hover {
+  transform: none;
+  border-color: var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 
 /* ===== Header ===== */
@@ -819,7 +855,7 @@ main.container {
   padding: 4px;
   border: 1px solid var(--gray-medium);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
-  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
   display: flex;
   flex-direction: column;
   height: 176px;
@@ -830,7 +866,6 @@ main.container {
 }
 
 .calendar-day:hover {
-  transform: translateY(-2px);
   border-color: var(--primary);
   box-shadow: 0 6px 16px rgba(102, 126, 234, 0.15);
   z-index: 2;
@@ -872,47 +907,61 @@ main.container {
 .calendar-event {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: flex-start;
+  gap: 6px;
   height: 44px;
   min-height: 44px;
-  padding: 0 4px;
-  border-radius: 6px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
   color: #fff !important;
   cursor: pointer;
   width: 100%;
   box-sizing: border-box;
   white-space: nowrap;
   overflow: hidden;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid var(--calendar-event-border);
   opacity: 1 !important;
   filter: none !important;
   appearance: none !important;
   -webkit-appearance: none !important;
   background-clip: padding-box !important;
   text-shadow: none !important;
-  box-shadow: none !important;
+  box-shadow: var(--calendar-event-shadow) !important;
   outline: none !important;
   text-decoration: none !important;
   font: inherit !important;
   margin: 0 !important;
-  transition: transform 0.2s ease, filter 0.2s ease;
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 
-.calendar-event:focus,
-.calendar-event:active,
 .calendar-event:hover {
   transform: translateY(-1px);
-  filter: brightness(1.05) !important;
+  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.18) !important;
 }
 
-.calendar-event.status-approved { background: linear-gradient(135deg, #22C55E, #15803D) !important; border-color: #15803D !important; }
-.calendar-event.status-pending { background: linear-gradient(135deg, #F59E0B, #B45309) !important; border-color: #B45309 !important; }
-.calendar-event.status-rejected { background: linear-gradient(135deg, #EF4444, #991B1B) !important; border-color: #991B1B !important; }
-.calendar-event.status-cancelled { background: linear-gradient(135deg, #94A3B8, #475569) !important; border-color: #475569 !important; }
-.calendar-event.status-driver_claimed { background: linear-gradient(135deg, #0EA5E9, #0369A1) !important; border-color: #0369A1 !important; }
-.calendar-event.status-driver_special_approved { background: linear-gradient(135deg, #8B5CF6, #5B21B6) !important; border-color: #5B21B6 !important; }
-.calendar-event.status-driver_block { background: linear-gradient(135deg, #F97316, #C2410C) !important; border-color: #C2410C !important; }
-.calendar-event.status-vehicle_block { background: linear-gradient(135deg, #991B1B, #7F1D1D) !important; border-color: #7F1D1D !important; }
+.calendar-event:active { transform: translateY(0); }
+.calendar-event:focus-visible,
+.more-events-btn:focus-visible {
+  outline: 3px solid var(--primary-dark) !important;
+  outline-offset: 2px;
+}
+
+.calendar-event.status-approved { background: var(--calendar-event-approved) !important; }
+.calendar-event.status-pending { background: var(--calendar-event-pending) !important; }
+.calendar-event.status-rejected { background: var(--calendar-event-rejected) !important; }
+.calendar-event.status-cancelled { background: var(--calendar-event-cancelled) !important; }
+.calendar-event.status-driver_claimed { background: var(--calendar-event-driver-claimed) !important; }
+.calendar-event.status-driver_special_approved { background: var(--calendar-event-special) !important; }
+.calendar-event.status-driver_block { background: var(--calendar-event-driver-leave) !important; }
+.calendar-event.status-vehicle_block { background: var(--calendar-event-vehicle-repair) !important; }
+.calendar-event.calendar-event--driver_leave { background: var(--calendar-event-driver-leave) !important; }
+.calendar-event.calendar-event--driver_busy { background: var(--calendar-event-driver-busy) !important; }
+.calendar-event.calendar-event--vehicle_repair { background: var(--calendar-event-vehicle-repair) !important; }
+.calendar-event.calendar-event--vehicle_busy { background: var(--calendar-event-driver-busy) !important; }
+.calendar-event.is-closed {
+  opacity: 0.6 !important;
+  filter: grayscale(0.45) !important;
+}
 .calendar-event.dim {
   opacity: 0.45 !important;
   filter: none !important;
@@ -920,19 +969,20 @@ main.container {
 }
 
 .evt-chip {
-  background: rgba(255, 255, 255, 0.25);
-  padding: 2px 5px;
-  border-radius: 4px;
-  font-size: 0.65rem;
+  background: var(--calendar-event-chip-bg);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
   font-weight: 700;
   flex-shrink: 0;
+  max-width: 42%;
   line-height: 1.2;
   color: #ffffff !important;
 }
 
 .evt-title {
-  font-size: 0.7rem;
-  font-weight: 500;
+  font-size: 0.75rem;
+  font-weight: 600;
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -942,35 +992,40 @@ main.container {
 }
 
 /* ===== More Button ===== */
-.more-events-btn,
-.more-events-btn:hover,
-.more-events-btn:focus,
-.more-events-btn:active {
-  font-size: 0.65rem;
+.more-events-btn {
+  font-size: 0.75rem;
   font-weight: 700;
-  color: #3730a3 !important;
-  background: #eef2ff !important;
-  border-radius: 4px;
+  color: var(--calendar-more-ink) !important;
+  background: var(--calendar-more-bg) !important;
+  border-radius: var(--radius-sm);
   text-align: center;
   height: 44px;
   min-height: 44px;
+  width: 100%;
+  padding: 8px 4px;
+  line-height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   margin-top: auto;
-  border: none !important;
+  border: 1px solid var(--calendar-more-border) !important;
   appearance: none !important;
   -webkit-appearance: none !important;
   opacity: 1 !important;
   filter: none !important;
   box-shadow: none !important;
-  outline: none !important;
   font-family: inherit !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 
+.more-events-btn > span { pointer-events: none; }
+
 .more-events-btn:hover {
-  background: #e0e7ff !important;
+  background: var(--calendar-more-bg-hover) !important;
 }
 
 /* ===== Tooltip ===== */
@@ -1047,24 +1102,26 @@ main.container {
   /* ปรับ Event ให้เน้น Chip ตรงกลาง */
   .calendar-event {
     justify-content: center;
-    padding: 0 1px;
+    padding: 0 2px;
     height: 44px;
     min-height: 44px;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
+    box-shadow: none !important;
   }
   
   .evt-chip {
-padding: 1px 2px;
-font-size: 9px;
-letter-spacing: -0.2px;
-background: transparent;
-width: 100%;
-text-align: center;
-overflow: hidden;
-text-overflow: clip;
-white-space: nowrap;
-font-weight: 800;
-}
+    padding: 2px 3px;
+    font-size: 0.65rem;
+    letter-spacing: -0.2px;
+    background: var(--calendar-event-chip-bg);
+    width: 100%;
+    max-width: 100%;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 800;
+  }
   
   .more-events-btn { 
     height: 44px;
@@ -1169,7 +1226,7 @@ font-weight: 800;
 
   .calendar-event {
     font-size: 11px;
-    padding: 4px 6px;
+    padding: 0 2px;
     -webkit-line-clamp: 1;
   }
 

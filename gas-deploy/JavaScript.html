@@ -3888,15 +3888,15 @@ function getResourceBlockRenderMeta(row) {
     const isVehicleRepair = statusKey === 'vehicle_block' && (reasonLc.includes('ซ่อม') || reasonLc.includes('repair') || reasonLc.includes('maintenance'));
 
     if (statusKey === 'driver_block' && isDriverLeave) {
-        return { variantKey: 'driver_leave', typeText: 'ลาพนักงานขับรถ', chipText: 'ลา', iconText: '📌', calendarBg: 'linear-gradient(135deg, #F97316, #C2410C)', calendarBorder: '#C2410C', badgeBg: '#fff7ed', badgeColor: '#c2410c', primaryText: driverName || 'ไม่ระบุพนักงานขับรถ', secondaryText: reasonText || 'บล็อกการลา' };
+        return { variantKey: 'driver_leave', typeText: 'ลาพนักงานขับรถ', chipText: 'ลา', iconText: '📌', badgeBg: '#fff7ed', badgeColor: '#c2410c', primaryText: driverName || 'ไม่ระบุพนักงานขับรถ', secondaryText: reasonText || 'บล็อกการลา' };
     }
     if (statusKey === 'driver_block') {
-        return { variantKey: 'driver_busy', typeText: 'คนขับติดภารกิจ', chipText: 'ติดภารกิจ', iconText: '⏳', calendarBg: 'linear-gradient(135deg, #F59E0B, #D97706)', calendarBorder: '#D97706', badgeBg: '#fffbeb', badgeColor: '#b45309', primaryText: driverName || 'ไม่ระบุพนักงานขับรถ', secondaryText: reasonText || 'บล็อกการติดภารกิจ' };
+        return { variantKey: 'driver_busy', typeText: 'คนขับติดภารกิจ', chipText: 'ติดภารกิจ', iconText: '⏳', badgeBg: '#fffbeb', badgeColor: '#b45309', primaryText: driverName || 'ไม่ระบุพนักงานขับรถ', secondaryText: reasonText || 'บล็อกการติดภารกิจ' };
     }
     if (isVehicleRepair) {
-        return { variantKey: 'vehicle_repair', typeText: 'นำรถไปซ่อม', chipText: 'ซ่อม', iconText: '🛠', calendarBg: 'linear-gradient(135deg, #991B1B, #7F1D1D)', calendarBorder: '#7F1D1D', badgeBg: '#fef2f2', badgeColor: '#991b1b', primaryText: plateText || 'ไม่ระบุทะเบียนรถ', secondaryText: assignedDriver ? ('ผู้นำรถไปซ่อม: ' + assignedDriver) : (reasonText || 'บล็อกรถซ่อม') };
+        return { variantKey: 'vehicle_repair', typeText: 'นำรถไปซ่อม', chipText: 'ซ่อม', iconText: '🛠', badgeBg: '#fef2f2', badgeColor: '#991b1b', primaryText: plateText || 'ไม่ระบุทะเบียนรถ', secondaryText: assignedDriver ? ('ผู้นำรถไปซ่อม: ' + assignedDriver) : (reasonText || 'บล็อกรถซ่อม') };
     }
-    return { variantKey: 'vehicle_busy', typeText: 'รถติดภารกิจ', chipText: 'ติดภารกิจ', iconText: '⏳', calendarBg: 'linear-gradient(135deg, #F59E0B, #D97706)', calendarBorder: '#D97706', badgeBg: '#fffbeb', badgeColor: '#b45309', primaryText: plateText || 'ไม่ระบุทะเบียนรถ', secondaryText: assignedDriver ? ('ผู้ดูแลรถ: ' + assignedDriver) : (reasonText || 'บล็อกรถติดภารกิจ') };
+    return { variantKey: 'vehicle_busy', typeText: 'รถติดภารกิจ', chipText: 'ติดภารกิจ', iconText: '⏳', badgeBg: '#fffbeb', badgeColor: '#b45309', primaryText: plateText || 'ไม่ระบุทะเบียนรถ', secondaryText: assignedDriver ? ('ผู้ดูแลรถ: ' + assignedDriver) : (reasonText || 'บล็อกรถติดภารกิจ') };
 }
 
 function renderCalendar(year, month) {
@@ -4105,41 +4105,11 @@ function renderCalendar(year, month) {
                 eventEl.disabled = false;
                 eventEl.setAttribute('aria-disabled', 'false');
                 const isItemClosed = ev?.isClosed || statusKey === 'closed' || (ev?.blockStatus && String(ev?.blockStatus).toLowerCase() === 'closed');
-                if (isItemClosed) {
-                    eventEl.style.opacity = '0.5';
-                    eventEl.style.filter = 'grayscale(0.6)';
-                }
-
-                // 🍓 [BERRY FIX] centering + reset styles
-                eventEl.style.width = '100%';
-                eventEl.style.display = 'flex';
-                eventEl.style.flexDirection = 'row';
-                eventEl.style.alignItems = 'center';
-                eventEl.style.justifyContent = 'center';
-                eventEl.style.textAlign = 'center';
-                eventEl.style.gap = '3px';
-                eventEl.style.border = '1px solid transparent';
-                eventEl.style.cursor = 'pointer';
-                eventEl.style.pointerEvents = 'auto';
-                eventEl.style.opacity = '1';
-                eventEl.style.filter = 'none';
-                eventEl.style.appearance = 'none';
-                eventEl.style.webkitAppearance = 'none';
-                eventEl.style.MozAppearance = 'none';
-                eventEl.style.boxShadow = 'none';
-                eventEl.style.outline = 'none';
-                eventEl.style.textShadow = 'none';
-                eventEl.style.backgroundClip = 'padding-box';
-                eventEl.style.backgroundImage = 'none';
-                eventEl.style.font = 'inherit';
-                eventEl.style.padding = '0 4px';
-                eventEl.style.margin = '0';
-                eventEl.style.minHeight = '44px';
-                eventEl.style.height = '44px';
-                eventEl.style.borderRadius = '6px';
-                eventEl.style.transform = 'none';
-                eventEl.style.overflow = 'hidden';
+                if (isItemClosed) eventEl.classList.add('is-closed');
                 const blockMeta = getResourceBlockRenderMeta(ev);
+                if (blockMeta?.variantKey) {
+                    eventEl.classList.add(`calendar-event--${blockMeta.variantKey}`);
+                }
 
                 let typeText = String(ev?.workType || ev?.type || ev?.jobType || 'ไม่ระบุ').trim();
                 let projText = String(ev?.workName || ev?.project || ev?.proj || ev?.projectName || ev?.purpose || ev?.name || '').trim();
@@ -4149,29 +4119,9 @@ function renderCalendar(year, month) {
                     projText = blockMeta.primaryText;
                 }
 
-                const themeMap = {
-                    approved:               { bg: 'linear-gradient(135deg, #22C55E, #15803D)', border: '#15803D' },
-                    pending:                { bg: 'linear-gradient(135deg, #F59E0B, #B45309)', border: '#B45309' },
-                    rejected:               { bg: 'linear-gradient(135deg, #EF4444, #991B1B)', border: '#991B1B' },
-                    cancelled:              { bg: 'linear-gradient(135deg, #94A3B8, #475569)', border: '#475569' },
-                    driver_special_approved:{ bg: 'linear-gradient(135deg, #8B5CF6, #5B21B6)', border: '#5B21B6' },
-                    driver_block:           { bg: 'linear-gradient(135deg, #F97316, #C2410C)', border: '#C2410C' },
-                    vehicle_block:          { bg: 'linear-gradient(135deg, #991B1B, #7F1D1D)', border: '#7F1D1D' }
-                };
-                if (blockMeta) themeMap[statusKey] = { bg: blockMeta.calendarBg, border: blockMeta.calendarBorder };
-
-                const theme = themeMap[statusKey] || themeMap.pending;
-                eventEl.style.background = theme.bg;
-                eventEl.style.backgroundColor = 'transparent';
-                eventEl.style.borderColor = theme.border;
-                eventEl.style.color = '#ffffff';
-
-                // 🍓 [BERRY FIX] chip + title กึ่งกลาง
-                eventEl.innerHTML = `<span class="evt-chip" style="background:rgba(255,255,255,0.2);color:#fff;border-radius:4px;padding:0 3px;font-size:0.7rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:inline-block;">${escapeHtml(typeText)}</span>${projText ? `<span class="evt-title" style="color:#fff;opacity:0.92;font-size:0.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;display:inline-block;">${escapeHtml(projText)}</span>` : ''}`;
-
-                if (blockMeta) {
-                    eventEl.innerHTML = `<span class="evt-chip" style="background:rgba(255,255,255,0.2);color:#fff;border-radius:4px;padding:0 3px;font-size:0.68rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:inline-block;">${escapeHtml(blockMeta.chipText)}</span>${projText ? `<span class="evt-title" style="color:#fff;opacity:0.96;font-size:0.7rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;display:inline-block;">${escapeHtml(blockMeta.iconText + ' ' + projText)}</span>` : ''}`;
-                }
+                const chipText = blockMeta ? blockMeta.chipText : typeText;
+                const titleText = blockMeta ? `${blockMeta.iconText || ''} ${projText}`.trim() : projText;
+                eventEl.innerHTML = `<span class="evt-chip">${escapeHtml(chipText)}</span>${titleText ? `<span class="evt-title">${escapeHtml(titleText)}</span>` : ''}`;
 
                 const tooltipData = {
                     type: typeText,
@@ -4185,6 +4135,7 @@ function renderCalendar(year, month) {
                     assignedDriver: String(ev?.assignedDriver || '-') // 🍓 BERRY FIX: pass assignedDriver to tooltip
                 };
                 if (blockMeta) tooltipData.place = String(blockMeta.secondaryText || '-');
+                eventEl.setAttribute('aria-label', [typeText, projText].filter(Boolean).join(' — ') || 'รายการกิจกรรม');
 
                 eventEl.addEventListener('mouseenter', function (e) { safeShowTooltip(e, tooltipData); });
                 eventEl.addEventListener('mousemove',  function (e) { safeMoveTooltip(e, tooltipData); });
@@ -4208,16 +4159,7 @@ function renderCalendar(year, month) {
                 moreBtn.setAttribute('aria-disabled', 'false');
                 moreBtn.setAttribute('data-date', currentDayIso);
                 moreBtn.disabled = false;
-                moreBtn.innerHTML = `<span style="pointer-events:none;">ดูเพิ่ม +${overflowCount} รายการ</span>`;
-                moreBtn.style.cssText =[
-                    'display:block', 'width:100%', 'min-height:44px', 'padding:8px 4px',
-                    'margin-top:2px', 'background:#eef2ff', 'color:#3730a3',
-                    'border:1px solid #a5b4fc', 'border-radius:6px',
-                    'font-size:0.72rem', 'font-weight:700', 'text-align:center',
-                    'cursor:pointer', 'pointer-events:auto', 'opacity:1', 'filter:none',
-                    'appearance:none', '-webkit-appearance:none', 'line-height:26px',
-                    'white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis'
-                ].join(';');
+                moreBtn.innerHTML = `<span>ดูเพิ่ม +${overflowCount} รายการ</span>`;
 
                 moreBtn.addEventListener('click', function (e) {
                     e.preventDefault();
