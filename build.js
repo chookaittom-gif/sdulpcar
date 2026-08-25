@@ -25,12 +25,7 @@ try {
     console.log(`✅ Copied direct: ${destPath}`);
   };
 
-  // 4. บิวด์หุ้มสำหรับ Google Apps Script
-  wrapAndSave('src/app.js', 'JavaScript.html', 'script');
-  wrapAndSave('src/gviz-service.js', 'gviz-service.html', 'script');
-  wrapAndSave('src/style.css', 'Style.html', 'style');
-
-  // 5. คัดลอกโดยตรงสำหรับ Netlify Static Site
+  // 4. บิวด์เฉพาะไฟล์ Static Asset ที่จำเป็นสำหรับ Web Serving
   copyDirect('src/app.js', 'app.js');
   copyDirect('src/style.css', 'style.css');
   copyDirect('src/config.js', 'config.js');
