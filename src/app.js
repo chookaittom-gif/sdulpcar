@@ -2406,8 +2406,8 @@ function showTab(tabKey) {
   if (window.__berryCalendarResizeWired) return;
   window.__berryCalendarResizeWired = true;
 
-  let timer = 0;
-  let lastRun = 0;
+  let lastWidth = window.innerWidth;
+  let lastHeight = window.innerHeight;
 
   function isCalendarReady() {
     const tab = document.getElementById('calendar-tab');
@@ -2422,26 +2422,38 @@ function showTab(tabKey) {
   }
 
   function scheduleCalendarReflow(reason) {
-  // Debounce calendar reflow to avoid excessive renders.
-  if (window.__berryScheduleTimer) clearTimeout(window.__berryScheduleTimer);
-  window.__berryScheduleTimer = setTimeout(() => {
-    if (!isCalendarReady()) return;
-    if (typeof __berryReflowCalendarAfterTabShown__ === 'function') {
-      try {
-        __berryReflowCalendarAfterTabShown__();
-        console.log('✅ [Calendar] Reflow executed from:', reason || 'unknown');
-      } catch (err) {
-        console.error('❌ [Calendar] Reflow failed:', err);
+    // Debounce calendar reflow to avoid excessive renders.
+    if (window.__berryScheduleTimer) clearTimeout(window.__berryScheduleTimer);
+    window.__berryScheduleTimer = setTimeout(() => {
+      if (!isCalendarReady()) return;
+
+      // Skip resize if dimensions didn't actually change (e.g. mobile scrollbar / address bar)
+      if (reason === 'resize') {
+        const curWidth = window.innerWidth;
+        const curHeight = window.innerHeight;
+        if (Math.abs(curWidth - lastWidth) < 10 && Math.abs(curHeight - lastHeight) < 10) {
+          return;
+        }
+        lastWidth = curWidth;
+        lastHeight = curHeight;
       }
-    }
-  }, 300);
-}
-window.__berryScheduleCalendarResize__ = scheduleCalendarReflow;
-window.addEventListener('resize', () => scheduleCalendarReflow('resize'), { passive: true });
-window.addEventListener('orientationchange', () => scheduleCalendarReflow('orientationchange'), { passive: true });
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) scheduleCalendarReflow('visibilitychange');
-});
+
+      if (typeof __berryReflowCalendarAfterTabShown__ === 'function') {
+        try {
+          __berryReflowCalendarAfterTabShown__();
+          console.log('✅ [Calendar] Reflow executed from:', reason || 'unknown');
+        } catch (err) {
+          console.error('❌ [Calendar] Reflow failed:', err);
+        }
+      }
+    }, 300);
+  }
+  window.__berryScheduleCalendarResize__ = scheduleCalendarReflow;
+  window.addEventListener('resize', () => scheduleCalendarReflow('resize'), { passive: true });
+  window.addEventListener('orientationchange', () => scheduleCalendarReflow('orientationchange'), { passive: true });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) scheduleCalendarReflow('visibilitychange');
+  });
 })();
 
 window.addEventListener('load', async function () {
@@ -3813,10 +3825,10 @@ function renderCalendar(year, month) {
         performance.mark('calendar-render-start');
     }
 
-    // 🍓 BERRY FIX: ระบบป้องกันการ Render ซ้ำซ้อน (Throttle Lock 50ms)
+    // 🍓 BERRY FIX: ระบบป้องกันการ Render ซ้ำซ้อน (Throttle Lock 350ms)
     const renderKey = `${year}-${month}`;
     const nowMs = Date.now();
-    if (renderCalendar.__lastRun && renderCalendar.__lastKey === renderKey && (nowMs - renderCalendar.__lastRun < 50)) {
+    if (renderCalendar.__lastRun && renderCalendar.__lastKey === renderKey && (nowMs - renderCalendar.__lastRun < 350)) {
         console.log('⚡ [Calendar] Skipped redundant render (Throttle Lock)');
         if (isFirstRender) {
             window.__isFirstCalendarRender = true;
