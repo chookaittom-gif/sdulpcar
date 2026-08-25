@@ -31,22 +31,72 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-fast: 160ms;
 
-  --status-approved-bg: linear-gradient(135deg, #15803d, #166534);
-  --status-pending-bg: linear-gradient(135deg, #b45309, #92400e);
-  --status-rejected-bg: linear-gradient(135deg, #dc2626, #991b1b);
-  --status-cancelled-bg: linear-gradient(135deg, #64748b, #475569);
-  --calendar-event-approved: var(--status-approved-bg);
-  --calendar-event-pending: var(--status-pending-bg);
-  --calendar-event-rejected: var(--status-rejected-bg);
-  --calendar-event-cancelled: var(--status-cancelled-bg);
-  --calendar-event-driver-claimed: #0369A1;
-  --calendar-event-special: #5B21B6;
-  --calendar-event-driver-leave: #C2410C;
-  --calendar-event-driver-busy: #D97706;
-  --calendar-event-vehicle-repair: #7F1D1D;
-  --calendar-event-border: rgba(255, 255, 255, 0.3);
-  --calendar-event-chip-bg: rgba(255, 255, 255, 0.18);
-  --calendar-event-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
+  /* ==================== STATUS TOKENS (SDU Light & Breathable System) ==================== */
+  --status-approved-accent: #16a34a;
+  --status-approved-tint: #f0fdf4;
+  --status-approved-border: #bbf7d0;
+  --status-approved-ink: #14532d;
+  --status-approved-chip-bg: #dcfce7;
+  --status-approved-chip-ink: #15803d;
+
+  --status-pending-accent: #d97706;
+  --status-pending-tint: #fffbeb;
+  --status-pending-border: #fde68a;
+  --status-pending-ink: #78350f;
+  --status-pending-chip-bg: #fef3c7;
+  --status-pending-chip-ink: #b45309;
+
+  --status-rejected-accent: #dc2626;
+  --status-rejected-tint: #fef2f2;
+  --status-rejected-border: #fecaca;
+  --status-rejected-ink: #7f1d1d;
+  --status-rejected-chip-bg: #fee2e2;
+  --status-rejected-chip-ink: #b91c1c;
+
+  --status-cancelled-accent: #64748b;
+  --status-cancelled-tint: #f8fafc;
+  --status-cancelled-border: #e2e8f0;
+  --status-cancelled-ink: #334155;
+  --status-cancelled-chip-bg: #f1f5f9;
+  --status-cancelled-chip-ink: #475569;
+
+  --status-driver-claimed-accent: #0284c7;
+  --status-driver-claimed-tint: #f0f9ff;
+  --status-driver-claimed-border: #bae6fd;
+  --status-driver-claimed-ink: #075985;
+  --status-driver-claimed-chip-bg: #e0f2fe;
+  --status-driver-claimed-chip-ink: #0369a1;
+
+  --status-special-accent: #7c3aed;
+  --status-special-tint: #f5f3ff;
+  --status-special-border: #ddd6fe;
+  --status-special-ink: #4c1d95;
+  --status-special-chip-bg: #ede9fe;
+  --status-special-chip-ink: #6d28d9;
+
+  --status-driver-leave-accent: #ea580c;
+  --status-driver-leave-tint: #fff7ed;
+  --status-driver-leave-border: #fed7aa;
+  --status-driver-leave-ink: #7c2d12;
+  --status-driver-leave-chip-bg: #ffedd5;
+  --status-driver-leave-chip-ink: #c2410c;
+
+  --status-driver-busy-accent: #eab308;
+  --status-driver-busy-tint: #fefce8;
+  --status-driver-busy-border: #fef08a;
+  --status-driver-busy-ink: #713f12;
+  --status-driver-busy-chip-bg: #fef9c3;
+  --status-driver-busy-chip-ink: #a16207;
+
+  --status-vehicle-repair-accent: #991b1b;
+  --status-vehicle-repair-tint: #fef2f2;
+  --status-vehicle-repair-border: #fca5a5;
+  --status-vehicle-repair-ink: #450a0a;
+  --status-vehicle-repair-chip-bg: #fee2e2;
+  --status-vehicle-repair-chip-ink: #991b1b;
+
+  --calendar-event-border: var(--gray-medium);
+  --calendar-event-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
   --calendar-more-bg: #EEF2FF;
   --calendar-more-bg-hover: #E0E7FF;
   --calendar-more-border: #C7D2FE;
@@ -731,6 +781,168 @@ main.container {
 
 .stat-card[data-status] {
   cursor: pointer;
+.btn-warning { background: var(--warning); color: white; }
+.btn-danger { background: var(--danger); color: white; }
+
+.btn-sm {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+.btn-block {
+  width: 100%;
+  justify-content: center;
+}
+
+@media (max-width: 768px) {
+  .btn {
+    padding: 0.6rem 1.2rem;
+    font-size: 0.9rem;
+  }
+}
+
+/* ==================== STATUS BADGES ==================== */
+.status-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  border: 1px solid transparent;
+  /* 🍓 BERRY UX: เพิ่ม Cursor และ Transition ให้ดูเป็นปุ่มที่กดได้ */
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05); /* เงาบางๆ ให้ดูลอย */
+  transition: all 0.2s ease-in-out; 
+}
+
+.status-badge.approved {
+  background-color: #D1FAE5;
+  color: #065F46;
+  border-color: #A7F3D0;
+}
+
+.status-badge.pending {
+  background-color: #FEF3C7;
+  color: #92400E;
+  border-color: #FDE68A;
+}
+
+.status-badge.rejected {
+  background-color: #FEE2E2;
+  color: #991B1B;
+  border-color: #FECACA;
+}
+
+.status-badge.cancelled {
+  background-color: #E5E7EB;
+  color: #4B5563;
+  border-color: #D1D5DB;
+}
+
+.status-badge:hover {
+  transform: translateY(-2px); /* 🍓 ลอยขึ้นนิดนึงตอน Hover */
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.12); /* 🍓 เงาเข้มขึ้น */
+  filter: brightness(0.95);
+}
+/* ==================== TABLES ==================== */
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  font-size: 0.9rem;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.75rem;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--gray-medium);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.data-table td {
+  white-space: normal;
+  max-width: 200px;
+  line-height: 1.4;
+}
+
+.data-table td:nth-child(2),
+.data-table td:nth-child(3),
+.data-table td:nth-child(4) {
+  max-width: 150px;
+  min-width: 120px;
+}
+
+.data-table th {
+  background: var(--gray-light);
+  font-weight: 600;
+  color: var(--dark);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.data-table tbody tr { transition: background-color 0.2s ease; }
+.data-table tbody tr:hover { background: var(--gray-light); }
+
+@media (max-width: 768px) {
+  .data-table { font-size: 0.8rem; }
+  .data-table th,
+  .data-table td { padding: 0.5rem 0.25rem; }
+  .data-table td { max-width: none; } /* ✅ ปลดล็อกความกว้าง */
+}
+
+.bookings-table.small { font-size: 0.85rem; }
+.bookings-table.small th, .bookings-table.small td { padding: 0.5rem; }
+.bookings-table.small td { max-width: 120px; }
+
+/* ==================== BOOKINGS STATS ROW ==================== */
+.bookings-stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: 1rem;
+  padding: 1rem;
+  box-shadow: var(--glass-shadow);
+  border-left: 5px solid var(--primary);
+  transition: var(--transition-premium);
+}
+
+.stat-card .stat-icon { font-size: 1.5rem; margin-bottom: 0.25rem; }
+.stat-card .stat-label { font-size: 0.85rem; color: var(--gray-dark); margin: 0; font-weight: 500; }
+.stat-card .stat-number { font-size: 1.75rem; font-weight: 700; color: var(--dark); margin: 0; line-height: 1; }
+
+.stat-card.stat-success { border-left-color: var(--success); }
+.stat-card.stat-danger { border-left-color: var(--danger); }
+.stat-card.stat-secondary { border-left-color: var(--gray); }
+.stat-card.stat-warning { border-left-color: var(--warning); }
+
+.stat-card[data-status] {
+  cursor: pointer;
   transition: var(--transition-premium);
 }
 .stat-card[data-status]:hover {
@@ -800,31 +1012,6 @@ main.container {
   align-items: center;
   justify-content: center;
   border-radius: 12px;
-}
-
-/* ===== KPI / Status Pills ===== */
-#calendar-kpi-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 14px;
-  width: 100%;
-}
-
-#calendar-kpi-bar .kpi-pill,
-#calendar-kpi-bar .status-pill,
-#calendar-kpi-bar button {
-  min-height: 36px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  border: none;
-  appearance: none;
-  -webkit-appearance: none;
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-  opacity: 1;
-  filter: none;
 }
 
 /* ===== Week Labels ===== */
@@ -916,32 +1103,35 @@ main.container {
   gap: 6px;
   height: 44px;
   min-height: 44px;
-  padding: 0 8px;
+  padding: 0 8px 0 6px;
   border-radius: var(--radius-sm);
-  color: #fff !important;
+  background: var(--ev-tint, #f8fafc);
+  color: var(--ev-ink, #1e293b) !important;
   cursor: pointer;
   width: 100%;
   box-sizing: border-box;
   white-space: nowrap;
   overflow: hidden;
-  border: 1px solid var(--calendar-event-border);
+  border: 1px solid var(--ev-border, var(--gray-medium));
+  border-left: 3.5px solid var(--ev-accent, var(--primary));
   opacity: 1 !important;
   filter: none !important;
   appearance: none !important;
   -webkit-appearance: none !important;
   background-clip: padding-box !important;
   text-shadow: none !important;
-  box-shadow: var(--calendar-event-shadow) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04) !important;
   outline: none !important;
   text-decoration: none !important;
   font: inherit !important;
   margin: 0 !important;
-  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 
 .calendar-event:hover {
   transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.18) !important;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08) !important;
+  filter: brightness(0.98) !important;
 }
 
 .calendar-event:active { transform: translateY(0); }
@@ -951,18 +1141,91 @@ main.container {
   outline-offset: 2px;
 }
 
-.calendar-event.status-approved { background: var(--calendar-event-approved) !important; }
-.calendar-event.status-pending { background: var(--calendar-event-pending) !important; }
-.calendar-event.status-rejected { background: var(--calendar-event-rejected) !important; }
-.calendar-event.status-cancelled { background: var(--calendar-event-cancelled) !important; }
-.calendar-event.status-driver_claimed { background: var(--calendar-event-driver-claimed) !important; }
-.calendar-event.status-driver_special_approved { background: var(--calendar-event-special) !important; }
-.calendar-event.status-driver_block { background: var(--calendar-event-driver-leave) !important; }
-.calendar-event.status-vehicle_block { background: var(--calendar-event-vehicle-repair) !important; }
-.calendar-event.calendar-event--driver_leave { background: var(--calendar-event-driver-leave) !important; }
-.calendar-event.calendar-event--driver_busy { background: var(--calendar-event-driver-busy) !important; }
-.calendar-event.calendar-event--vehicle_repair { background: var(--calendar-event-vehicle-repair) !important; }
-.calendar-event.calendar-event--vehicle_busy { background: var(--calendar-event-driver-busy) !important; }
+/* Status Variations for Calendar Event */
+.calendar-event.status-approved {
+  --ev-accent: var(--status-approved-accent);
+  --ev-tint: var(--status-approved-tint);
+  --ev-border: var(--status-approved-border);
+  --ev-ink: var(--status-approved-ink);
+  --ev-chip-bg: var(--status-approved-chip-bg);
+  --ev-chip-ink: var(--status-approved-chip-ink);
+}
+
+.calendar-event.status-pending {
+  --ev-accent: var(--status-pending-accent);
+  --ev-tint: var(--status-pending-tint);
+  --ev-border: var(--status-pending-border);
+  --ev-ink: var(--status-pending-ink);
+  --ev-chip-bg: var(--status-pending-chip-bg);
+  --ev-chip-ink: var(--status-pending-chip-ink);
+}
+
+.calendar-event.status-rejected {
+  --ev-accent: var(--status-rejected-accent);
+  --ev-tint: var(--status-rejected-tint);
+  --ev-border: var(--status-rejected-border);
+  --ev-ink: var(--status-rejected-ink);
+  --ev-chip-bg: var(--status-rejected-chip-bg);
+  --ev-chip-ink: var(--status-rejected-chip-ink);
+}
+
+.calendar-event.status-cancelled {
+  --ev-accent: var(--status-cancelled-accent);
+  --ev-tint: var(--status-cancelled-tint);
+  --ev-border: var(--status-cancelled-border);
+  --ev-ink: var(--status-cancelled-ink);
+  --ev-chip-bg: var(--status-cancelled-chip-bg);
+  --ev-chip-ink: var(--status-cancelled-chip-ink);
+}
+
+.calendar-event.status-driver_claimed {
+  --ev-accent: var(--status-driver-claimed-accent);
+  --ev-tint: var(--status-driver-claimed-tint);
+  --ev-border: var(--status-driver-claimed-border);
+  --ev-ink: var(--status-driver-claimed-ink);
+  --ev-chip-bg: var(--status-driver-claimed-chip-bg);
+  --ev-chip-ink: var(--status-driver-claimed-chip-ink);
+}
+
+.calendar-event.status-driver_special_approved {
+  --ev-accent: var(--status-special-accent);
+  --ev-tint: var(--status-special-tint);
+  --ev-border: var(--status-special-border);
+  --ev-ink: var(--status-special-ink);
+  --ev-chip-bg: var(--status-special-chip-bg);
+  --ev-chip-ink: var(--status-special-chip-ink);
+}
+
+.calendar-event.status-driver_block,
+.calendar-event.calendar-event--driver_leave {
+  --ev-accent: var(--status-driver-leave-accent);
+  --ev-tint: var(--status-driver-leave-tint);
+  --ev-border: var(--status-driver-leave-border);
+  --ev-ink: var(--status-driver-leave-ink);
+  --ev-chip-bg: var(--status-driver-leave-chip-bg);
+  --ev-chip-ink: var(--status-driver-leave-chip-ink);
+}
+
+.calendar-event.calendar-event--driver_busy,
+.calendar-event.calendar-event--vehicle_busy {
+  --ev-accent: var(--status-driver-busy-accent);
+  --ev-tint: var(--status-driver-busy-tint);
+  --ev-border: var(--status-driver-busy-border);
+  --ev-ink: var(--status-driver-busy-ink);
+  --ev-chip-bg: var(--status-driver-busy-chip-bg);
+  --ev-chip-ink: var(--status-driver-busy-chip-ink);
+}
+
+.calendar-event.status-vehicle_block,
+.calendar-event.calendar-event--vehicle_repair {
+  --ev-accent: var(--status-vehicle-repair-accent);
+  --ev-tint: var(--status-vehicle-repair-tint);
+  --ev-border: var(--status-vehicle-repair-border);
+  --ev-ink: var(--status-vehicle-repair-ink);
+  --ev-chip-bg: var(--status-vehicle-repair-chip-bg);
+  --ev-chip-ink: var(--status-vehicle-repair-chip-ink);
+}
+
 .calendar-event.is-closed {
   opacity: 0.6 !important;
   filter: grayscale(0.45) !important;
@@ -1068,6 +1331,106 @@ main.container {
   opacity: 1;
   transform: translateY(0);
 }
+
+/* ===== KPI Bar ===== */
+.calendar-kpi-bar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  padding: 6px 10px;
+  background: var(--light, #f8fafc);
+  border: 1px solid var(--gray-medium, #e2e8f0);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  border-radius: var(--radius, 12px);
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.kpi-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: #ffffff;
+  color: var(--dark, #1e293b) !important;
+  border: 1px solid var(--kpi-border, var(--gray-medium));
+  border-radius: 999px;
+  padding: 0.3rem 0.65rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transform: translateY(4px);
+  opacity: 0;
+  transition: all var(--dur-fast, 160ms) var(--ease-out);
+  cursor: pointer;
+  user-select: none;
+  max-width: 100%;
+}
+
+.kpi-chip.pop-in { transform: translateY(0); opacity: 1; }
+
+.kpi-chip .kpi-ico { font-size: 0.85rem; }
+.kpi-chip .kpi-label { 
+  font-size: 0.8rem; 
+  font-weight: 600; 
+  color: var(--gray-dark, #4b5563) !important; 
+  text-shadow: none !important; 
+}
+.kpi-chip .kpi-num { 
+  font-weight: 700; 
+  min-width: 1.8ch; 
+  text-align: center; 
+  font-size: 0.8rem; 
+  color: var(--kpi-badge-ink, #ffffff) !important;
+  background: var(--kpi-badge-bg, var(--gray));
+  border-radius: 999px;
+  padding: 1px 7px;
+  text-shadow: none !important; 
+}
+
+.kpi-approved {
+  --kpi-border: var(--status-approved-border, #bbf7d0);
+  --kpi-badge-bg: var(--status-approved-accent, #16a34a);
+  --kpi-badge-ink: #ffffff;
+}
+.kpi-pending {
+  --kpi-border: var(--status-pending-border, #fde68a);
+  --kpi-badge-bg: var(--status-pending-accent, #d97706);
+  --kpi-badge-ink: #ffffff;
+}
+.kpi-rejected {
+  --kpi-border: var(--status-rejected-border, #fecaca);
+  --kpi-badge-bg: var(--status-rejected-accent, #dc2626);
+  --kpi-badge-ink: #ffffff;
+}
+.kpi-cancelled {
+  --kpi-border: var(--status-cancelled-border, #e2e8f0);
+  --kpi-badge-bg: var(--status-cancelled-accent, #64748b);
+  --kpi-badge-ink: #ffffff;
+}
+.kpi-total {
+  --kpi-border: rgba(102, 126, 234, 0.35);
+  --kpi-badge-bg: var(--primary, #667eea);
+  --kpi-badge-ink: #ffffff;
+}
+
+.kpi-chip:hover {
+  background: #ffffff;
+  border-color: var(--primary);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+
+.kpi-chip.active {
+  background: #ffffff;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary), 0 2px 6px rgba(102, 126, 234, 0.2);
+  transform: translateY(-1px);
+}
+.kpi-chip.active .kpi-label {
+  color: var(--dark, #1e293b) !important;
+  font-weight: 700;
+}
+
 /* ==================== RESPONSIVE BREAKPOINTS ==================== */
 
 /* Tablet Mode (768px - 1023px) */
@@ -1104,12 +1467,12 @@ main.container {
   
   #calendar-grid .events-container { gap: 2px; }
   #calendar-grid {
-  animation: calendarPop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-@keyframes calendarPop {
-  0% { opacity: 0; transform: scale(0.98) translateY(10px); }
-  100% { opacity: 1; transform: scale(1) translateY(0); }
-}
+    animation: calendarPop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+  @keyframes calendarPop {
+    0% { opacity: 0; transform: scale(0.98) translateY(10px); }
+    100% { opacity: 1; transform: scale(1) translateY(0); }
+  }
   
   /* หัวใจสำคัญ: ซ่อนชื่องานบนมือถือ */
   .evt-title { display: none !important; }
@@ -1128,7 +1491,8 @@ main.container {
     padding: 2px 3px;
     font-size: 0.65rem;
     letter-spacing: -0.2px;
-    background: var(--calendar-event-chip-bg);
+    background: var(--ev-chip-bg, rgba(0, 0, 0, 0.06));
+    color: var(--ev-chip-ink, var(--dark)) !important;
     width: 100%;
     max-width: 100%;
     text-align: center;
@@ -1137,7 +1501,6 @@ main.container {
     white-space: nowrap;
     font-weight: 800;
   }
-  
   .more-events-btn { 
     height: 44px;
     min-height: 44px;
@@ -1145,64 +1508,6 @@ main.container {
     margin-top: auto;
   }
 }
-
-/* ===== KPI Bar ===== */
-.calendar-kpi-bar {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  flex-wrap: wrap;
-  margin-bottom: 1rem;
-  padding: 0.5rem;
-  background: var(--gray-light);
-  border-radius: var(--radius);
-  max-width: 100%;
-  overflow: hidden;
-}
-
-.kpi-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: var(--bg);
-  color: #ffffff !important; /* 🍓 BERRY FIX: บังคับสีขาว */
-  border-radius: 999px;
-  padding: 0.35rem 0.7rem;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15); /* 🍓 BERRY FIX: ใส่เงากล่องให้ชัดขึ้น */
-  transform: translateY(4px);
-  opacity: 0;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
-  cursor: pointer;
-  user-select: none;
-  max-width: 100%;
-}
-
-.kpi-chip.pop-in { transform: translateY(0); opacity: 1; }
-
-.kpi-chip .kpi-ico { font-size: 0.9rem; }
-.kpi-chip .kpi-label { 
-  font-size: 0.8rem; 
-  font-weight: 600; 
-  color: #ffffff !important; 
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); 
-}
-.kpi-chip .kpi-num { 
-  font-weight: 800; 
-  min-width: 1.5ch; 
-  text-align: right; 
-  font-size: 0.95rem; 
-  color: #ffffff !important; 
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); 
-}
-
-.kpi-approved { --bg: var(--status-approved-bg); --fg: #fff; }
-.kpi-pending  { --bg: var(--status-pending-bg); --fg: #fff; }
-.kpi-rejected { --bg: var(--status-rejected-bg); --fg: #fff; }
-.kpi-cancelled{ --bg: var(--status-cancelled-bg); --fg: #fff; }
-.kpi-total    { --bg: linear-gradient(135deg, var(--primary), var(--primary-dark)); --fg: #fff; }
-
-.kpi-chip:hover { box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12); transform: translateY(-2px); }
-.kpi-chip.active { box-shadow: 0 0 0 3px var(--primary); transform: translateY(-2px); }
 
 /* ===== Responsive ===== */
 @media (max-width: 900px) {
