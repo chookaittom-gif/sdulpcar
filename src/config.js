@@ -86,7 +86,8 @@
     getDriverList: 60000,
     getDashboardFuelLevels: 30000,
     apiGetAdminPanelData: 30000,
-    apiGetFuelFormOptions: 60000
+    apiGetFuelFormOptions: 60000,
+    getAvailableVehicles: 10000
   };
 
   function normalizeUrl(url) {

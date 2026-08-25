@@ -2416,6 +2416,9 @@ function showTab(tabKey) {
     if (!tab || !tab.classList.contains('active')) return false;
     if (document.hidden) return false;
     if (loading && !loading.classList.contains('hidden')) return false;
+    // Don't reflow calendar if a modal is open/active
+    const activeModal = document.querySelector('.modal.active, .modal[style*="display: flex"], .modal[style*="display: block"]');
+    if (activeModal) return false;
     return true;
   }
 
