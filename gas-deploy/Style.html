@@ -31,10 +31,14 @@
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --dur-fast: 160ms;
 
-  --calendar-event-approved: #16A34A;
-  --calendar-event-pending: #D97706;
-  --calendar-event-rejected: #DC2626;
-  --calendar-event-cancelled: #475569;
+  --status-approved-bg: linear-gradient(135deg, #15803d, #166534);
+  --status-pending-bg: linear-gradient(135deg, #b45309, #92400e);
+  --status-rejected-bg: linear-gradient(135deg, #dc2626, #991b1b);
+  --status-cancelled-bg: linear-gradient(135deg, #64748b, #475569);
+  --calendar-event-approved: var(--status-approved-bg);
+  --calendar-event-pending: var(--status-pending-bg);
+  --calendar-event-rejected: var(--status-rejected-bg);
+  --calendar-event-cancelled: var(--status-cancelled-bg);
   --calendar-event-driver-claimed: #0369A1;
   --calendar-event-special: #5B21B6;
   --calendar-event-driver-leave: #C2410C;
@@ -1191,10 +1195,10 @@ main.container {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); 
 }
 
-.kpi-approved { --bg: linear-gradient(135deg, #22c55e, #15803d); --fg: #fff; }
-.kpi-pending  { --bg: linear-gradient(135deg, #f59e0b, #b45309); --fg: #fff; }
-.kpi-rejected { --bg: linear-gradient(135deg, #ef4444, #991b1b); --fg: #fff; }
-.kpi-cancelled{ --bg: linear-gradient(135deg, #94a3b8, #475569); --fg: #fff; }
+.kpi-approved { --bg: var(--status-approved-bg); --fg: #fff; }
+.kpi-pending  { --bg: var(--status-pending-bg); --fg: #fff; }
+.kpi-rejected { --bg: var(--status-rejected-bg); --fg: #fff; }
+.kpi-cancelled{ --bg: var(--status-cancelled-bg); --fg: #fff; }
 .kpi-total    { --bg: linear-gradient(135deg, var(--primary), var(--primary-dark)); --fg: #fff; }
 
 .kpi-chip:hover { box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12); transform: translateY(-2px); }
