@@ -534,7 +534,7 @@ main.container {
 }
 
 .btn-secondary { background: #6B7280; color: white; }
-.btn-success { background: var(--success); color: white; }
+.btn-success { background: #15803d; color: white; border-color: #166534; }
 .btn-warning { background: var(--warning); color: white; }
 .btn-danger { background: var(--danger); color: white; }
 
@@ -822,9 +822,9 @@ main.container {
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
   display: flex;
   flex-direction: column;
-  height: 110px;
-  min-height: 110px;
-  max-height: 110px;
+  height: 176px;
+  min-height: 176px;
+  max-height: 176px;
   overflow: hidden;
   position: relative;
 }
@@ -858,8 +858,8 @@ main.container {
 }
 
 .calendar-day.today .day-number {
-  color: white;
-  background: var(--primary);
+  color: #ffffff;
+  background: #4338ca;
   border-radius: 50%;
   width: 24px;
   height: 24px;
@@ -873,8 +873,8 @@ main.container {
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 22px;
-  min-height: 22px;
+  height: 44px;
+  min-height: 44px;
   padding: 0 4px;
   border-radius: 6px;
   color: #fff !important;
@@ -948,12 +948,12 @@ main.container {
 .more-events-btn:active {
   font-size: 0.65rem;
   font-weight: 700;
-  color: var(--primary) !important;
-  background: rgba(102, 126, 234, 0.1) !important;
+  color: #3730a3 !important;
+  background: #eef2ff !important;
   border-radius: 4px;
   text-align: center;
-  height: 20px;
-  min-height: 20px;
+  height: 44px;
+  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -970,7 +970,7 @@ main.container {
 }
 
 .more-events-btn:hover {
-  background: rgba(102, 126, 234, 0.2) !important;
+  background: #e0e7ff !important;
 }
 
 /* ===== Tooltip ===== */
@@ -1003,8 +1003,8 @@ main.container {
 /* Tablet Mode (768px - 1023px) */
 @media (max-width: 1023px) and (min-width: 768px) {
   .calendar-days, .calendar-grid { gap: 0.25rem; }
-  .calendar-day { height: 100px; min-height: 100px; max-height: 100px; }
-  .calendar-event { height: 20px; min-height: 20px; }
+  .calendar-day { height: 176px; min-height: 176px; max-height: 176px; }
+  .calendar-event { height: 44px; min-height: 44px; }
   .evt-title { font-size: 0.65rem; }
 }
 
@@ -1022,9 +1022,9 @@ main.container {
   .calendar-days, .calendar-grid { gap: 2px; }
   
   .calendar-day { 
-    height: 100px; /* ขยายกล่องให้พอดีกับ 4 งาน */
-    min-height: 100px; 
-    max-height: 100px;
+    height: 176px;
+    min-height: 176px;
+    max-height: 176px;
     padding: 3px; 
     border-radius: 6px;
   }
@@ -1048,8 +1048,8 @@ main.container {
   .calendar-event {
     justify-content: center;
     padding: 0 1px;
-    height: 18px; 
-    min-height: 18px;
+    height: 44px;
+    min-height: 44px;
     border-radius: 3px;
   }
   
@@ -1067,8 +1067,8 @@ font-weight: 800;
 }
   
   .more-events-btn { 
-    height: 18px; 
-    min-height: 18px; 
+    height: 44px;
+    min-height: 44px;
     font-size: 0.6rem; 
     margin-top: auto;
   }
@@ -1135,7 +1135,7 @@ font-weight: 800;
 /* ===== Responsive ===== */
 @media (max-width: 900px) {
   .calendar-days, .calendar-grid { gap: 0.4rem; }
-  .calendar-day { min-height: 100px; }
+  .calendar-day { min-height: 176px; }
   .day-label { font-size: 12px; padding: 0.4rem; }
 }
 
@@ -1164,7 +1164,7 @@ font-weight: 800;
   }
 
   .calendar-days, .calendar-grid { gap: 0.25rem; }
-  .calendar-day { min-height: 76px; padding: 0.45rem; }
+  .calendar-day { min-height: 176px; padding: 0.45rem; }
   .day-number { font-size: 12px; margin-bottom: 0.25rem; }
 
   .calendar-event {
@@ -1177,7 +1177,7 @@ font-weight: 800;
 }
 
 @media (max-width: 420px) {
-  .calendar-day { min-height: 70px; }
+  .calendar-day { min-height: 176px; }
   .day-label { font-size: 11px; padding: 0.35rem; }
 }
 

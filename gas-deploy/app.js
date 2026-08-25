@@ -1,6 +1,8 @@
 /* ================== ULTRA-SAFE GLOBAL SHIMS & REQUEST QUEUE (Fix 429) ================== */
 (function() {
   const G = (typeof window !== 'undefined') ? window : this;
+  const stableScriptRunner = G.google && G.google.script && G.google.script.run;
+  G.__vbStableScriptRunner = stableScriptRunner || null;
 
   // 1. ระบบคิวแบบ "ทีละหนึ่ง" (Serial Processing)
   const requestQueue = [];
@@ -44,7 +46,12 @@
  function executeRequest(req) {
   lastRunTime = Date.now();
   try {
-    google.script.run
+    const runner = G.__vbStableScriptRunner || (G.google && G.google.script && G.google.script.run);
+    if (!runner || typeof runner.withSuccessHandler !== 'function') {
+      throw new Error('Google Apps Script runner is not available');
+    }
+
+    runner
       .withSuccessHandler(function(res) {
         requestQueue.shift();
         req.resolve(res);
@@ -1669,6 +1676,11 @@ async function handleInsuranceSubmit(e) {
         const formObj = {};
         formData.forEach((value, key) => { formObj[key] = value; });
 
+        const dateValidation = validateClientDateRange(formObj.startDate, formObj.endDate);
+        if (!dateValidation.ok) throw new Error(dateValidation.error);
+        formObj.startDate = dateValidation.startISO;
+        formObj.endDate = dateValidation.endISO;
+
         const res = await new Promise((resolve, reject) => {
             google.script.run
                 .withSuccessHandler(resolve)
@@ -2750,6 +2762,14 @@ async function loadFuelData() {
     }
 }
 
+function getDriverDisplayName(driver) {
+  const raw = driver && typeof driver === 'object'
+    ? (driver.name || driver.displayName || driver.value || '')
+    : driver;
+  const name = String(raw == null ? '' : raw).trim();
+  return name === '[object Object]' ? '' : name;
+}
+
 /* [ANCHOR: Client - Load Insurance & Maintenance Tab Options] */
 async function loadInsuranceTabOptions() {
   _scheduleTabLoad(async () => {
@@ -2780,9 +2800,9 @@ async function loadInsuranceTabOptions() {
       if (driverEl) {
         driverEl.innerHTML =
           '<option value="">-- เลือกผู้บันทึก --</option>' +
-          cachedDrivers.map(function(name) {
-            const val = String(name || '').trim();
-            return `<option value="${val.replace(/"/g, '&quot;')}">${val}</option>`;
+          cachedDrivers.map(function(driver) {
+            const val = getDriverDisplayName(driver);
+            return val ? `<option value="${val.replace(/"/g, '&quot;')}">${val}</option>` : '';
           }).join('');
       }
       window.__loaded_insurance_opts = true;
@@ -2810,12 +2830,7 @@ async function loadInsuranceTabOptions() {
 
       const [plateRes, driverRes] = await Promise.all([
         run('apiGetInsurancePlates', {}),
-        new Promise((resolve, reject) => {
-          google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)
-            .getDriverList();
-        })
+        run('getDriverList', {})
       ]);
 
       if (window.__vbCurrentTab !== '#insurance-tab') return;
@@ -2839,9 +2854,9 @@ async function loadInsuranceTabOptions() {
       if (driverEl) {
         driverEl.innerHTML =
           '<option value="">-- เลือกผู้บันทึก --</option>' +
-          drivers.map(function(name) {
-            const val = String(name || '').trim();
-            return `<option value="${val.replace(/"/g, '&quot;')}">${val}</option>`;
+          drivers.map(function(driver) {
+            const val = getDriverDisplayName(driver);
+            return val ? `<option value="${val.replace(/"/g, '&quot;')}">${val}</option>` : '';
           }).join('');
       }
 
@@ -2905,9 +2920,9 @@ async function loadMaintenanceTabOptions() {
             if (driverEl) {
                 driverEl.innerHTML =
                     '<option value="">-- เลือกพนักงานขับรถ --</option>' +
-                    cachedDrivers.map(function(name) {
-                        const val = String(name || '').trim();
-                        return `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`;
+                    cachedDrivers.map(function(driver) {
+                        const val = getDriverDisplayName(driver);
+                        return val ? `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>` : '';
                     }).join('');
             }
             window.__loaded_maintenance_opts = true;
@@ -2964,9 +2979,9 @@ async function loadMaintenanceTabOptions() {
             if (driverEl) {
                 driverEl.innerHTML =
                     '<option value="">-- เลือกพนักงานขับรถ --</option>' +
-                    drivers.map(name => {
-                        const val = String(name || '').trim();
-                        return `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>`;
+                    drivers.map(driver => {
+                        const val = getDriverDisplayName(driver);
+                        return val ? `<option value="${escapeHtml(val)}">${escapeHtml(val)}</option>` : '';
                     }).join('');
             }
 
@@ -3411,6 +3426,66 @@ function syncAllThaiDateInputs() {
   });
 }
 
+function normalizeClientDateISO(value) {
+  const raw = String(value == null ? '' : value).trim();
+  let match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    match = raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+    if (!match) return '';
+    let year = Number(match[3]);
+    if (year > 2400 && year <= 3000) year -= 543;
+    match = ['', String(year), String(Number(match[2])), String(Number(match[1]))];
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return '';
+
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return '';
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function normalizeClientTime(value) {
+  const raw = String(value == null ? '' : value).trim();
+  const match = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return '';
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return '';
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function validateClientDateRange(startDate, endDate, startTime, endTime) {
+  const startISO = normalizeClientDateISO(startDate);
+  const endISO = normalizeClientDateISO(endDate || startDate);
+  if (!startISO || !endISO) {
+    return { ok: false, error: 'วันที่ไม่ถูกต้องหรืออยู่นอกช่วงปีที่รองรับ' };
+  }
+
+  const startDay = new Date(`${startISO}T00:00:00`);
+  const endDay = new Date(`${endISO}T00:00:00`);
+  if (endDay.getTime() < startDay.getTime()) {
+    return { ok: false, error: 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มต้น' };
+  }
+
+  const hasAnyTime = String(startTime || '').trim() || String(endTime || '').trim();
+  if (hasAnyTime) {
+    const startTimeISO = normalizeClientTime(startTime);
+    const endTimeISO = normalizeClientTime(endTime);
+    if (!startTimeISO || !endTimeISO) return { ok: false, error: 'กรุณาระบุเวลาให้ถูกต้อง' };
+
+    const start = new Date(`${startISO}T${startTimeISO}:00`);
+    const end = new Date(`${endISO}T${endTimeISO}:00`);
+    if (end.getTime() <= start.getTime()) {
+      return { ok: false, error: 'เวลาสิ้นสุดต้องมากกว่าเวลาเริ่มต้น' };
+    }
+  }
+
+  return { ok: true, startISO, endISO };
+}
+
 function validateBookingTime() {
   const startDateInput = document.getElementById('booking-date');
   const endDateInput = document.getElementById('return-date');
@@ -3479,6 +3554,12 @@ function wireBookingFormSubmit() {
     const endDateVal   = document.getElementById('return-date')?.dataset?.iso || document.getElementById('return-date')?.value || '';
     const startTimeVal = document.getElementById('booking-start')?.value || '';
     const endTimeVal   = document.getElementById('booking-end')?.value || '';
+
+    const dateValidation = validateClientDateRange(startDateVal, endDateVal, startTimeVal, endTimeVal);
+    if (!dateValidation.ok) {
+      if (typeof showToast === 'function') showToast(dateValidation.error, 'error');
+      return;
+    }
 
     if (startDateVal && endDateVal && startDateVal === endDateVal && startTimeVal && endTimeVal) {
       if (endTimeVal <= startTimeVal) {
@@ -3881,7 +3962,7 @@ function renderCalendar(year, month) {
     const lastDay = new Date(year, month, 0);
     const startOffset = firstDay.getDay();
     const totalDays = lastDay.getDate();
-    const displayLimit = 3; // 🍓 [BERRY FIX] max 3 items per cell
+    const displayLimit = 2; // แสดง 2 รายการและใช้ปุ่มดูเพิ่มเพื่อให้ touch target ไม่เล็กเกินไป
 
     const monthStartMs = new Date(year, month - 1, 1, 12, 0, 0).getTime();
     const monthEndMs = new Date(year, month - 1, totalDays, 12, 0, 0).getTime();
@@ -4052,8 +4133,8 @@ function renderCalendar(year, month) {
                 eventEl.style.font = 'inherit';
                 eventEl.style.padding = '0 4px';
                 eventEl.style.margin = '0';
-                eventEl.style.minHeight = '22px';
-                eventEl.style.height = '22px';
+                eventEl.style.minHeight = '44px';
+                eventEl.style.height = '44px';
                 eventEl.style.borderRadius = '6px';
                 eventEl.style.transform = 'none';
                 eventEl.style.overflow = 'hidden';
@@ -4122,18 +4203,18 @@ function renderCalendar(year, month) {
                 const moreBtn = document.createElement('button');
                 moreBtn.type = 'button';
                 moreBtn.className = 'more-events-btn';
-                moreBtn.setAttribute('aria-label', `ดูเพิ่มอีก ${overflowCount} รายการของวันที่ ${currentDayIso}`);
+                moreBtn.setAttribute('aria-label', `ดูเพิ่ม +${overflowCount} รายการ ของวันที่ ${currentDayIso}`);
                 moreBtn.setAttribute('aria-disabled', 'false');
                 moreBtn.setAttribute('data-date', currentDayIso);
                 moreBtn.disabled = false;
                 moreBtn.innerHTML = `<span style="pointer-events:none;">ดูเพิ่ม +${overflowCount} รายการ</span>`;
                 moreBtn.style.cssText =[
-                    'display:block', 'width:100%', 'min-height:22px', 'padding:2px 4px',
-                    'margin-top:2px', 'background:rgba(99,102,241,0.12)', 'color:#4f46e5',
-                    'border:1px solid rgba(99,102,241,0.25)', 'border-radius:6px',
+                    'display:block', 'width:100%', 'min-height:44px', 'padding:8px 4px',
+                    'margin-top:2px', 'background:#eef2ff', 'color:#3730a3',
+                    'border:1px solid #a5b4fc', 'border-radius:6px',
                     'font-size:0.72rem', 'font-weight:700', 'text-align:center',
                     'cursor:pointer', 'pointer-events:auto', 'opacity:1', 'filter:none',
-                    'appearance:none', '-webkit-appearance:none', 'line-height:18px',
+                    'appearance:none', '-webkit-appearance:none', 'line-height:26px',
                     'white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis'
                 ].join(';');
 
@@ -8552,6 +8633,9 @@ function renderBookingsTable(bookings, tbodyId, type) {
     var endLabel = b.actualEndAt ? '<span style="color:#f59e0b; font-weight:800;" title="ปิดงานก่อนกำหนด">จบงานจริง:</span>' : '<span style="color:#f59e0b; font-weight:800;">กลับ:</span>';
     var mEndLabel = b.actualEndAt ? '<span style="color:#f59e0b; font-weight:800;" title="ปิดงานก่อนกำหนด">จบจริง</span>' : '<span style="color:#f59e0b; font-weight:800;">กลับ</span>';
     var actualBadge = b.actualEndAt ? ' <span style="font-size:0.75rem; background:#fed7aa; color:#9a3412; padding:1px 4px; border-radius:4px; margin-left:4px;">🏁 ปิดก่อนกำหนด</span>' : '';
+    var dateWarning = b.dateError
+      ? '<span style="color:#991b1b; background:#fee2e2; padding:2px 6px; border-radius:5px; font-size:0.75rem; font-weight:800;" title="' + esc(b.dateError) + '">⚠ วันที่ไม่ถูกต้อง</span>'
+      : '';
 
     var desktopDateHtml =
       '<div class="desktop-only vberry-dt val-block" style="display:flex; flex-direction:column; gap:6px; min-width:0;">' +
@@ -8564,7 +8648,7 @@ function renderBookingsTable(bookings, tbodyId, type) {
           endLabel +
           '<span style="font-weight:600; white-space:nowrap;">' + esc(endP.date) + '</span>' +
           (endP.time ? '<span style="color:#475569; font-size:0.9em; white-space:nowrap;">⏰ ' + esc(endP.time) + '</span>' : '') +
-          actualBadge +
+          actualBadge + dateWarning +
         '</div>' +
       '</div>';
 
@@ -8575,6 +8659,7 @@ function renderBookingsTable(bookings, tbodyId, type) {
          '<span style="color:#94a3b8; font-weight:800;">→</span>' +
          mEndLabel +
          '<span style="font-weight:600; white-space:nowrap;">' + esc(eDateShort) + eTimePad + '</span>' +
+         dateWarning +
       '</div>';
 
     var dateHtml = desktopDateHtml + mobileDateHtml;
@@ -8747,8 +8832,19 @@ window.loadDashboardView = function(source) {
             });
         };
 
+        const chartsReady = function() {
+            const charts = window.google && window.google.visualization;
+            return !!(charts && typeof charts.ColumnChart === 'function' && typeof charts.PieChart === 'function');
+        };
+
+        if (loadSource === 'tab-switch' || loadSource === 'manual-retry' || loadSource === 'dashboard-load') {
+            if (typeof renderDashboardFuelWidget === 'function') {
+                renderDashboardFuelWidget(loadSource);
+            }
+        }
+
         // ⚡ PERF Step 2: ถ้า Charts ยังไม่โหลด → เรียก lazy loader (index.html) แทน warn+return
-        if (typeof google === 'undefined' || !google.charts) {
+        if (!chartsReady()) {
             if (typeof window.loadGoogleChartsOnDemand === 'function') {
                 window.loadGoogleChartsOnDemand(runRender);
             } else {
@@ -8760,17 +8856,7 @@ window.loadDashboardView = function(source) {
             return;
         }
 
-        if (!google.visualization) {
-            google.charts.setOnLoadCallback(runRender);
-        } else {
-            runRender();
-        }
-
-        if (loadSource === 'tab-switch' || loadSource === 'manual-retry' || loadSource === 'dashboard-load') {
-            if (typeof renderDashboardFuelWidget === 'function') {
-                renderDashboardFuelWidget(loadSource);
-            }
-        }
+        runRender();
 
     } catch (e) {
         finish();
@@ -8809,7 +8895,8 @@ window._renderDashboardChartsSafely = function(renderToken) {
             return;
         }
 
-        if (typeof google === 'undefined' || !google.visualization) {
+        const visualization = window.google && window.google.visualization;
+        if (!visualization || typeof visualization.ColumnChart !== 'function' || typeof visualization.PieChart !== 'function') {
             setEmptyChart(driverChartEl, '⏳', 'Google Charts ยังโหลดไม่เสร็จ');
             setEmptyChart(vehicleChartEl, '⏳', 'Google Charts ยังโหลดไม่เสร็จ');
             return;
@@ -8889,8 +8976,9 @@ window.drawDriverChart = function(driverData) {
         const container = document.getElementById('driver-chart');
         if (!container) return;
 
-        if (!google || !google.visualization || !google.visualization.ColumnChart) {
+        if (!window.google || !window.google.visualization || typeof window.google.visualization.ColumnChart !== 'function') {
             console.warn("⚠️ ColumnChart API not loaded");
+            container.innerHTML = '<div class="empty-state"><div class="icon">😿</div><div>Google Charts ยังไม่พร้อมใช้งาน</div></div>';
             return;
         }
 
@@ -8911,7 +8999,7 @@ window.drawDriverChart = function(driverData) {
             dataArray.push([name, count, `color: ${color}; opacity: 0.9`]);
         });
 
-        const data = google.visualization.arrayToDataTable(dataArray);
+        const data = window.google.visualization.arrayToDataTable(dataArray);
         const options = {
             title: '🏆 พนักงานขับรถยอดนิยม (Top 5)',
             titleTextStyle: { fontSize: 16, bold: true, color: '#1f2937', fontName: 'Sarabun' },
@@ -8924,7 +9012,7 @@ window.drawDriverChart = function(driverData) {
             tooltip: { textStyle: { fontName: 'Sarabun' } }
         };
 
-        const chart = new google.visualization.ColumnChart(container);
+        const chart = new window.google.visualization.ColumnChart(container);
         chart.draw(data, options);
     } catch (e) {
         console.error("❌ drawDriverChart Error:", e);
@@ -8936,8 +9024,9 @@ window.drawVehicleChart = function(vehicleData) {
         const container = document.getElementById('vehicle-chart');
         if (!container) return;
 
-        if (!google || !google.visualization || !google.visualization.PieChart) {
+        if (!window.google || !window.google.visualization || typeof window.google.visualization.PieChart !== 'function') {
             console.warn("⚠️ PieChart API not loaded");
+            container.innerHTML = '<div class="empty-state"><div class="icon">😿</div><div>Google Charts ยังไม่พร้อมใช้งาน</div></div>';
             return;
         }
 
@@ -8951,7 +9040,7 @@ window.drawVehicleChart = function(vehicleData) {
         const dataArray = [['รถ/ทะเบียน', 'จำนวนเที่ยว']];
         sortedVehicles.forEach(([name, count]) => { dataArray.push([name, count]); });
 
-        const data = google.visualization.arrayToDataTable(dataArray);
+        const data = window.google.visualization.arrayToDataTable(dataArray);
         const options = {
             title: '🚍 สัดส่วนการใช้รถ (เดือนนี้)',
             titleTextStyle: { fontSize: 16, bold: true, color: '#1f2937', fontName: 'Sarabun' },
@@ -8963,7 +9052,7 @@ window.drawVehicleChart = function(vehicleData) {
             tooltip: { textStyle: { fontName: 'Sarabun' } }
         };
 
-        const chart = new google.visualization.PieChart(container);
+        const chart = new window.google.visualization.PieChart(container);
         chart.draw(data, options);
     } catch (e) {
         console.error("❌ drawVehicleChart Error:", e);
@@ -10321,7 +10410,9 @@ function renderTablePage(type, containerId) {
             // ------------------------------------------
             } else if (type === 'insurance') {
                 let statusBadge = '';
-                if (item.status === 'expired') {
+                if (item.status === 'invalid') {
+                    statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;" title="${escapeHtml(item.dateError || 'ตรวจสอบวันที่ในชีต')}">วันที่ไม่ถูกต้อง</span>`;
+                } else if (item.status === 'expired') {
                     statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">หมดอายุ</span>`;
                 } else if (item.status === 'warning') {
                     statusBadge = `<span style="background:#fef3c7; color:#b45309; padding:4px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">ใกล้หมด</span>`;
@@ -10465,6 +10556,7 @@ window.toggleLiveRadar = function() {
     const drawer = document.getElementById('radar-drawer');
     const overlay = document.getElementById('radar-overlay');
     const fab = document.getElementById('radar-fab');
+    const closeButton = drawer ? drawer.querySelector('.radar-close') : null;
 
     if (!drawer || !overlay) {
         console.error('[Radar] drawer/overlay not found');
@@ -10474,12 +10566,21 @@ window.toggleLiveRadar = function() {
     const isOpen = drawer.classList.contains('open');
 
     if (!isOpen) {
+        drawer.__returnFocus = document.activeElement;
         drawer.classList.add('open');
         overlay.classList.add('open');
         document.body.style.overflow = 'hidden';
+        drawer.setAttribute('aria-hidden', 'false');
+        drawer.setAttribute('aria-modal', 'true');
+        drawer.removeAttribute('inert');
+        overlay.setAttribute('aria-hidden', 'false');
 
         if (fab) fab.disabled = true;
         renderRadarMeta({ serverNow: 'กำลังโหลด...', timezone: 'Asia/Bangkok' });
+
+        window.requestAnimationFrame(function() {
+            if (closeButton && typeof closeButton.focus === 'function') closeButton.focus();
+        });
 
         loadLiveStatusData().finally(function() {
             if (fab) fab.disabled = false;
@@ -10490,6 +10591,16 @@ window.toggleLiveRadar = function() {
     drawer.classList.remove('open');
     overlay.classList.remove('open');
     document.body.style.overflow = '';
+    drawer.setAttribute('aria-hidden', 'true');
+    drawer.setAttribute('aria-modal', 'false');
+    drawer.setAttribute('inert', '');
+    overlay.setAttribute('aria-hidden', 'true');
+    if (fab) fab.disabled = false;
+
+    const returnFocus = drawer.__returnFocus || fab;
+    if (returnFocus && typeof returnFocus.focus === 'function' && document.contains(returnFocus)) {
+        window.requestAnimationFrame(function() { returnFocus.focus(); });
+    }
 };
 
 function renderRadarMeta(res) {
@@ -11060,12 +11171,16 @@ function renderDashboardFuelWidget(source) {
 
     console.log('⛽ renderDashboardFuelWidget: Loading...', source || 'unknown');
 
-    new Promise(function(resolve, reject) {
-        google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)
-            .getDashboardFuelLevels();
-    }).then(function(res) {
+    var fuelRunner = (typeof window.googleScriptRunLimited === 'function')
+        ? window.googleScriptRunLimited
+        : (typeof window.apiCall === 'function' ? window.apiCall : null);
+    if (!fuelRunner) {
+        window.__dashboardFuelBusy = false;
+        container.innerHTML = '<div class="fuel-widget-error"><span style="font-weight:700;">โหลดข้อมูลน้ำมันไม่สำเร็จ</span><span style="font-size:0.85rem;">ไม่พบช่องทางเชื่อมต่อ Server</span></div>';
+        return;
+    }
+
+    Promise.resolve(fuelRunner('getDashboardFuelLevels', {})).then(function(res) {
         if (window.__dashboardFuelToken !== requestToken) return;
         if (window.__vbCurrentTab !== '#dashboard-tab') return;
         if (!res || !res.ok) throw new Error(res ? (res.error || 'Server error') : 'No response');
@@ -11167,12 +11282,16 @@ function selfTestDashboardFuelWidget() {
     console.log('🧪 === selfTestDashboardFuelWidget START ===');
 
     // STEP 1: โหลดข้อมูล Fuel
-    new Promise(function(resolve, reject) {
-        google.script.run
-            .withSuccessHandler(resolve)
-            .withFailureHandler(reject)
-            .getDashboardFuelLevels();
-    }).then(function(res) {
+    var fuelRunner = (typeof window.googleScriptRunLimited === 'function')
+        ? window.googleScriptRunLimited
+        : (typeof window.apiCall === 'function' ? window.apiCall : null);
+    if (!fuelRunner) {
+        log(1, 'FAIL', 'ไม่พบช่องทางเชื่อมต่อ Server');
+        console.error('❌ selfTestDashboardFuelWidget: runner unavailable');
+        return;
+    }
+
+    Promise.resolve(fuelRunner('getDashboardFuelLevels', {})).then(function(res) {
         if (res && res.ok) {
             log(1, 'PASS', 'โหลดข้อมูล Fuel สำเร็จ (' + (res.data || []).length + ' records)');
         } else {

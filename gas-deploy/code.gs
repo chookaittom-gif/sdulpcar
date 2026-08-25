@@ -14,7 +14,7 @@ const MAX_COLS          = 22;
 const CACHE_SEC         = 120;
 const TZ                = 'Asia/Bangkok';
 const SHEET_VEHICLE_STATUS = 'VehicleStatus';
-const INITIAL_DATA_CACHE_KEY = 'mainDataCache_v13_BerryFix';
+const INITIAL_DATA_CACHE_KEY = 'mainDataCache_v14_PublicDrivers';
 
 const COLMAP = {
   // คงไว้เหมือนเดิม ไม่ต้องเอาคอลัมน์ของ Availability มาปนค่ะ
@@ -510,6 +510,13 @@ function getMainData_(options) {
       const startISO = parseDateToISO_(row[idx.startDate]);
       const baseEndDate = parseDateToISO_(row[idx.endDate]) || startISO;
       const baseEndTime = parseTimeSafe_(row[idx.endTime]);
+      const dateValidation = validateDateRange(
+        row[idx.startDate],
+        row[idx.endDate] || row[idx.startDate],
+        row[idx.startTime],
+        row[idx.endTime],
+        { maxDays: false }
+      );
 
       const statusRaw = String(row[idx.status] || '').trim().toLowerCase();
       const statusKey = getStatusKeySafe_(statusRaw);
@@ -553,6 +560,7 @@ function getMainData_(options) {
         isSoftClosed: isSoftClosed,
         plannedEndDate: baseEndDate,
         plannedEndTime: baseEndTime,
+        dateError: dateValidation.ok ? '' : dateValidation.error,
         
         passengers: String(row[idx.passengers]||'').trim(),
         cancelReason: String(row[idx.cancelReason]||'').trim(),
@@ -691,7 +699,15 @@ function getMainData_(options) {
     }
 
     const driversRes = getDriversFromAdmin_(settings);
-    const drivers = (driversRes.ok && Array.isArray(driversRes.drivers)) ? driversRes.drivers :[];
+    const drivers = (driversRes.ok && Array.isArray(driversRes.drivers))
+      ? driversRes.drivers.map(function(driver) {
+          return {
+            name: String(driver && driver.name || '').trim(),
+            role: String(driver && driver.role || '').trim(),
+            active: driver && driver.active !== false
+          };
+        }).filter(function(driver) { return !!driver.name; })
+      : [];
     
     const platesRes = getAllVehiclePlatesFromSettings(settings);
     const vehicles  = platesRes.ok ? {
@@ -951,11 +967,23 @@ function selfTestSheetDateTextForCell() {
 }
 
 function createBookingAndBroadcast(payload) {
+  payload = payload || {};
   const rawWorkType = String(payload.workType || payload.jobType || '').trim();
   const customWorkType = String(payload.workTypeOther || '').trim();
 
   if (rawWorkType === 'อื่นๆ' && !customWorkType) {
     return { ok: false, error: 'กรุณาระบุประเภทงานอื่นๆ' };
+  }
+
+  const dateValidation = validateDateRange(
+    payload.startDate,
+    payload.endDate || payload.startDate,
+    payload.startTime,
+    payload.endTime,
+    { requireTime: true, maxDays: 30 }
+  );
+  if (!dateValidation.ok) {
+    return { ok: false, error: dateValidation.error };
   }
 
   const cache = CacheService.getScriptCache();
@@ -987,10 +1015,10 @@ function createBookingAndBroadcast(payload) {
 
     const requestedCount = parseInt(payload.vehicleCount, 10) || 1;
     const availabilityCheck = getAvailableVehicles({
-      startDate: payload.startDate,
-      endDate: payload.endDate || payload.startDate,
-      startTime: payload.startTime,
-      endTime: payload.endTime,
+      startDate: dateValidation.startISO,
+      endDate: dateValidation.endISO,
+      startTime: dateValidation.startTime,
+      endTime: dateValidation.endTime,
       carTypes: (payload.carType || '').split(',')
     });
 
@@ -1006,25 +1034,12 @@ function createBookingAndBroadcast(payload) {
     }
 
     const bookingId = reserveNextBookingId();
-    const sIso = parseDateToISO_(payload.startDate);
-    const eIso = parseDateToISO_(payload.endDate || payload.startDate);
-
-    const buildDateObj = (iso) => {
-      if (!iso) return null;
-      const p = iso.split('-');
-      return new Date(parseInt(p[0]), parseInt(p[1]) - 1, parseInt(p[2]), 0, 0, 0);
-    };
-
-    const sDateObj = buildDateObj(sIso);
-    const eDateObj = buildDateObj(eIso);
-
-    const dayDiff = (eDateObj - sDateObj) / (1000 * 60 * 60 * 24);
-    if (dayDiff > 30) {
-      return { ok: false, error: `ไม่สามารถจองยาวเกิน 30 วันได้ค่ะ (คุณเลือก ${dayDiff} วัน) กรุณาตรวจสอบวันที่อีกครั้ง` };
-    }
-
-    const sTimeStr = parseTimeSafe_(payload.startTime);
-    const eTimeStr = parseTimeSafe_(payload.endTime);
+    const sIso = dateValidation.startISO;
+    const eIso = dateValidation.endISO;
+    const sDateObj = parseDateTime_(sIso, '00:00');
+    const eDateObj = parseDateTime_(eIso, '00:00');
+    const sTimeStr = dateValidation.startTime;
+    const eTimeStr = dateValidation.endTime;
 
     const carTypeMap = { 'van': 'รถตู้', 'truck': 'รถบรรทุก' };
     const typeLabel = (payload.carType || '').split(',')
@@ -1046,9 +1061,9 @@ function createBookingAndBroadcast(payload) {
     setV('destination', payload.place || payload.destination);
     setV('carType', typeLabel);
     setV('vehicleCount', requestedCount);
-    setV('startDate', sheetDateTextForCell(payload.startDate));  // FIX: text dd/MM/yyyy
+    setV('startDate', sheetDateTextForCell(sIso));  // FIX: text dd/MM/yyyy
     setV('startTime', sTimeStr);
-    setV('endDate', sheetDateTextForCell(payload.endDate || payload.startDate));  // FIX: text dd/MM/yyyy
+    setV('endDate', sheetDateTextForCell(eIso));  // FIX: text dd/MM/yyyy
     setV('endTime', eTimeStr);
     setV('passengers', payload.passengers);
 
@@ -4379,6 +4394,64 @@ function parseDateToISO_(v) {
   }
 }
 
+function isValidDateISO(iso) {
+  if (typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+
+  var parts = iso.split('-').map(Number);
+  var year = parts[0], month = parts[1], day = parts[2];
+  if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+
+  var date = new Date(year, month - 1, day);
+  return date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day;
+}
+
+function validateDateRange(startDate, endDate, startTime, endTime, options) {
+  options = options || {};
+
+  var startISO = parseDateToISO_(startDate);
+  var endISO = parseDateToISO_(endDate || startDate);
+  if (!isValidDateISO(startISO) || !isValidDateISO(endISO)) {
+    return { ok: false, error: 'วันที่ไม่ถูกต้องหรืออยู่นอกช่วงปีที่รองรับ (ค.ศ. 1900-2100)' };
+  }
+
+  var startTimeText = parseTimeSafe_(startTime);
+  var endTimeText = parseTimeSafe_(endTime);
+  var hasAnyTime = String(startTime || '').trim() || String(endTime || '').trim();
+  if (options.requireTime && (!hasAnyTime || !String(startTime || '').trim() || !String(endTime || '').trim())) {
+    return { ok: false, error: 'กรุณาระบุเวลาไปและเวลากลับให้ครบถ้วน' };
+  }
+
+  var startAt = parseDateTime_(startISO, startTimeText);
+  var endAt = parseDateTime_(endISO, endTimeText);
+  if (!startAt || !endAt || isNaN(startAt.getTime()) || isNaN(endAt.getTime())) {
+    return { ok: false, error: 'ไม่สามารถอ่านวันที่หรือเวลาได้ กรุณาตรวจสอบข้อมูลอีกครั้ง' };
+  }
+
+  var dayDiff = (parseDateTime_(endISO, '00:00') - parseDateTime_(startISO, '00:00')) / (1000 * 60 * 60 * 24);
+  if (dayDiff < 0) {
+    return { ok: false, error: 'วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มต้น' };
+  }
+  if (hasAnyTime && endAt.getTime() <= startAt.getTime()) {
+    return { ok: false, error: 'เวลาสิ้นสุดต้องมากกว่าเวลาเริ่มต้น' };
+  }
+  if (typeof options.maxDays === 'number' && dayDiff > options.maxDays) {
+    return { ok: false, error: 'ไม่สามารถจองยาวเกิน ' + options.maxDays + ' วันได้ค่ะ (คุณเลือก ' + dayDiff + ' วัน)' };
+  }
+
+  return {
+    ok: true,
+    startISO: startISO,
+    endISO: endISO,
+    startTime: startTimeText,
+    endTime: endTimeText,
+    startAt: startAt,
+    endAt: endAt,
+    dayDiff: dayDiff
+  };
+}
+
 /**
  * รวมวันที่ ISO และเวลา String ให้เป็น Date Object (Local Time)
  */
@@ -6079,7 +6152,6 @@ function getDriversFromAdmin_(settings) {
 
         return {
           username: d.username,
-          pass: d.pass,
           name: d.name,
           role: d.role,
           active: isActive
@@ -6635,10 +6707,21 @@ function getAvailableVehicles(payload) {
       return String(s || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
     };
 
-    const nd1 = parseDateToISO_(d1);
-    const nd2 = parseDateToISO_(d2);
-    const startTime24 = parseTimeSafe_(payload.startTime);
-    const endTime24 = parseTimeSafe_(payload.endTime);
+    const requestedDateValidation = validateDateRange(
+      d1,
+      d2,
+      payload.startTime,
+      payload.endTime,
+      { maxDays: false }
+    );
+    if (!requestedDateValidation.ok) {
+      return { ok: false, error: requestedDateValidation.error, vehicles: [], drivers: [] };
+    }
+
+    const nd1 = requestedDateValidation.startISO;
+    const nd2 = requestedDateValidation.endISO;
+    const startTime24 = requestedDateValidation.startTime;
+    const endTime24 = requestedDateValidation.endTime;
     const reqStart = parseDateTime_(nd1, startTime24);
     const reqEnd = parseDateTime_(nd2, endTime24);
     const nowMs = getServerNowBangkok_().getTime();
@@ -6669,9 +6752,18 @@ function getAvailableVehicles(payload) {
       const status = getStatusKeySafe_(statusRaw);
       const isSoftClosedStatus = /(closed|completed|done|finish|ปิด|เสร็จ|จบ)/.test(statusRaw);
       if (status === 'approved' || status === 'pending' || status === 'driver_special_approved') {
-        const rStartISO = parseDateToISO_(row[idx.startDate]);
-        const bStart = parseDateTime_(rStartISO, parseTimeSafe_(row[idx.startTime]));
-        let bEnd = parseDateTime_(parseDateToISO_(row[idx.endDate]) || rStartISO, parseTimeSafe_(row[idx.endTime]));
+        const bookingDateValidation = validateDateRange(
+          row[idx.startDate],
+          row[idx.endDate] || row[idx.startDate],
+          row[idx.startTime],
+          row[idx.endTime],
+          { maxDays: false }
+        );
+        if (!bookingDateValidation.ok) continue;
+
+        const rStartISO = bookingDateValidation.startISO;
+        const bStart = parseDateTime_(rStartISO, bookingDateValidation.startTime);
+        let bEnd = parseDateTime_(bookingDateValidation.endISO, bookingDateValidation.endTime);
 
         const aEndObj = actualEndsMap[rowId];
         if (isSoftClosedStatus && aEndObj && aEndObj.actualEndAtObj && !isNaN(aEndObj.actualEndAtObj.getTime())) {
@@ -7309,7 +7401,7 @@ function apiGetInsuranceHistory() {
         startDate: _fmtThaiDateBE(r[4] ? new Date(r[4]) : null),
         endDate: _fmtThaiDateBE(endDate),
         status: realStatus,        
-        remark: String(r[7]),
+        remark: sanitizeStoredRemark(r[7]),
         cost: Number(r[8] || 0)
       };
     }).reverse();
@@ -7394,15 +7486,43 @@ function apiGetMaintenanceHistory() {
   } catch (e) { return { ok: false, error: e.message }; }
 }
 
+function normalizeDriverNameInput(value) {
+  var raw = value;
+  if (raw && typeof raw === 'object') {
+    raw = raw.name || raw.displayName || raw.value || '';
+  }
+
+  var name = String(raw == null ? '' : raw).trim();
+  return name === '[object Object]' ? '' : name;
+}
+
+function sanitizeStoredRemark(value) {
+  return String(value == null ? '' : value)
+    .replace(/\[object Object\]/g, 'ไม่ระบุ')
+    .trim();
+}
+
 function saveInsuranceRecord(form) {
   try {
+    form = form || {};
     const ss = SpreadsheetApp.getActive();
     const sh = ss.getSheetByName('Insurance');
+
+    const dateValidation = validateDateRange(
+      form.startDate,
+      form.endDate,
+      null,
+      null,
+      { maxDays: false }
+    );
+    if (!dateValidation.ok) return { ok: false, message: dateValidation.error };
+
+    const driverName = normalizeDriverNameInput(form.driver);
     
     // รวม Driver เข้าไปใน Remark (เพราะชีตนี้ไม่มีคอลัมน์ Driver แยก)
     let finalRemark = form.note || form.remark || '';
-    if (form.driver) {
-      finalRemark = (finalRemark ? finalRemark + ' ' : '') + '(ผู้บันทึก: ' + form.driver + ')';
+    if (driverName) {
+      finalRemark = (finalRemark ? finalRemark + ' ' : '') + '(ผู้บันทึก: ' + driverName + ')';
     }
 
     // ✅ เรียงข้อมูลให้ตรงกับชีต Insurance (A-I)
@@ -7413,8 +7533,8 @@ function saveInsuranceRecord(form) {
       form.plate,                        // B
       form.company,                      // C
       form.policyNo || form.policyNumber,// D
-      form.startDate,                    // E
-      form.endDate,                      // F
+      dateValidation.startISO,           // E
+      dateValidation.endISO,             // F
       'Active',                          // G
       finalRemark,                       // H
       form.cost                          // I: Cost (✅ แก้แล้ว: ใส่ Cost ให้ถูกช่องท้ายสุด)
@@ -7448,8 +7568,9 @@ function listInsuranceRecords() {
       if (sDate === '-') sDate = '';
       if (eDate === '-') eDate = '';
 
-      let realStatus = 'active';
-      if (row[5]) {
+      const dateValidation = validateDateRange(row[4], row[5], null, null, { maxDays: false });
+      let realStatus = dateValidation.ok ? 'active' : 'invalid';
+      if (dateValidation.ok && row[5]) {
          const now = new Date();
          const due = new Date(row[5]);
          const diff = (due - now) / (1000 * 60 * 60 * 24);
@@ -7465,7 +7586,8 @@ function listInsuranceRecords() {
         startDate: sDate,
         endDate:   eDate,
         status:    realStatus,
-        remark:    String(row[7] || ''),
+        dateError: dateValidation.ok ? '' : dateValidation.error,
+        remark:    sanitizeStoredRemark(row[7]),
         cost:      Number(row[8] || 0)
       };
     });
@@ -7499,7 +7621,7 @@ function listMaintenanceRecords() {
       cost:      Number(row[4] || 0),
       odometer:  String(row[5] || ''),
       location:  String(row[6] || ''),
-      remark:    String(row[7] || ''),
+      remark:    sanitizeStoredRemark(row[7]),
       fileUrl:   String(row[8] || '')
     }));
 
@@ -7515,6 +7637,7 @@ function listMaintenanceRecords() {
 
 function saveMaintenanceRecord(form, fileData) {
   try {
+    form = form || {};
     const ss = SpreadsheetApp.getActive();
     const sh = ss.getSheetByName('Maintenance');
 
@@ -7533,8 +7656,9 @@ function saveMaintenanceRecord(form, fileData) {
 
     // รวม Driver เข้าไปใน Remark (เพราะชีตนี้ไม่มีคอลัมน์ Driver แยก)
     let finalRemark = form.remark || '';
-    if (form.driver) {
-      finalRemark = (finalRemark ? finalRemark + ' ' : '') + '(ผู้บันทึก: ' + form.driver + ')';
+    const driverName = normalizeDriverNameInput(form.driver);
+    if (driverName) {
+      finalRemark = (finalRemark ? finalRemark + ' ' : '') + '(ผู้บันทึก: ' + driverName + ')';
     }
 
     // ✅ เรียงข้อมูลให้ตรงกับชีต Maintenance (A-I)

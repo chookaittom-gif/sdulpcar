@@ -2,7 +2,7 @@
 <html lang="th">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ระบบจองยานพาหนะ - มหาวิทยาลัยสวนดุสิต ศูนย์การศึกษาลำปาง</title>
     <link rel="icon" href="data:,">
 
@@ -464,12 +464,12 @@
                         <label for="insurance-plate">ทะเบียนรถ *</label>
                     </div>
                     <div class="form-group">
-                        <input type="text" name="company" required placeholder=" ">
-                        <label>บริษัทประกัน *</label>
+                        <input type="text" id="insurance-company" name="company" required placeholder=" ">
+                        <label for="insurance-company">บริษัทประกัน *</label>
                     </div>
                     <div class="form-group">
-    <input type="text" name="policyNo" required placeholder=" ">
-    <label>เลขที่กรมธรรม์ *</label>
+    <input type="text" id="insurance-policyNo" name="policyNo" required placeholder=" ">
+    <label for="insurance-policyNo">เลขที่กรมธรรม์ *</label>
 </div>
 
 <div class="form-group">
@@ -480,8 +480,8 @@
 </div>
 
                     <div class="form-group">
-                        <input type="number" name="cost" placeholder=" " step="0.01" min="0">
-                        <label>ค่าเบี้ยประกัน (บาท)</label>
+                        <input type="number" id="insurance-cost" name="cost" placeholder=" " step="0.01" min="0">
+                        <label for="insurance-cost">ค่าเบี้ยประกัน (บาท)</label>
                     </div>
 
                     <div class="form-group">
@@ -493,8 +493,8 @@
                         <label for="insEnd">วันที่สิ้นสุด *</label>
                     </div>
                     <div class="form-group full-width">
-                        <textarea name="note" rows="2" placeholder=" "></textarea>
-                        <label>หมายเหตุ</label>
+                        <textarea id="insurance-note" name="note" rows="2" placeholder=" "></textarea>
+                        <label for="insurance-note">หมายเหตุ</label>
                     </div>
                     <div class="form-group full-width">
                         <button type="submit" class="btn btn-success btn-block">💾 บันทึกข้อมูล</button>
@@ -1344,7 +1344,9 @@
 <div id="radar-drawer"
      class="radar-drawer"
      role="dialog"
-     aria-modal="true"
+     aria-modal="false"
+     aria-hidden="true"
+     inert
      aria-labelledby="radar-title">
   <div class="radar-header">
     <div style="min-width:0; flex:1;">
@@ -1407,8 +1409,37 @@
             var _chartsLoading = false;
             var _chartsCallbacks = [];
 
+            function chartsReady() {
+              var visualization = window.google && window.google.visualization;
+              return !!(visualization &&
+                typeof visualization.ColumnChart === 'function' &&
+                typeof visualization.PieChart === 'function');
+            }
+
+            function flushCallbacks() {
+              var callbacks = _chartsCallbacks.slice();
+              _chartsCallbacks = [];
+              callbacks.forEach(function(fn) { try { fn(); } catch(e) { console.warn('Charts callback failed', e); } });
+            }
+
+            function waitForCharts(attemptsLeft) {
+              if (chartsReady()) {
+                _chartsLoaded = true;
+                _chartsLoading = false;
+                flushCallbacks();
+                return;
+              }
+              if (attemptsLeft <= 0) {
+                _chartsLoading = false;
+                console.warn('⚠️ Google Charts API constructors ไม่พร้อมใช้งาน');
+                flushCallbacks();
+                return;
+              }
+              window.setTimeout(function() { waitForCharts(attemptsLeft - 1); }, 100);
+            }
+
             window.loadGoogleChartsOnDemand = function(cb) {
-              if (_chartsLoaded) {
+              if (_chartsLoaded && chartsReady()) {
                 if (typeof cb === 'function') cb();
                 return;
               }
@@ -1419,17 +1450,23 @@
               var s = document.createElement('script');
               s.src = 'https://www.gstatic.com/charts/loader.js';
               s.onload = function() {
-                google.charts.load('current', { packages: ['corechart'] });
-                google.charts.setOnLoadCallback(function() {
-                  _chartsLoaded = true;
+                if (!window.google || !window.google.charts) {
                   _chartsLoading = false;
-                  _chartsCallbacks.forEach(function(fn) { try { fn(); } catch(e) {} });
-                  _chartsCallbacks = [];
-                });
+                  console.warn('⚠️ Google Charts namespace ไม่พร้อมใช้งาน');
+                  flushCallbacks();
+                  return;
+                }
+                window.google.charts.load('current', { packages: ['corechart'] });
+                if (typeof window.google.charts.setOnLoadCallback === 'function') {
+                  window.google.charts.setOnLoadCallback(function() { waitForCharts(50); });
+                } else {
+                  waitForCharts(50);
+                }
               };
               s.onerror = function() {
                 _chartsLoading = false;
                 console.warn('⚠️ Google Charts loader ไม่สามารถโหลดได้');
+                flushCallbacks();
               };
               document.head.appendChild(s);
             };
