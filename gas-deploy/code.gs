@@ -223,7 +223,7 @@ function doPost(e) {
 function _renderWebAppIndex_() {
   var content = HtmlService.createHtmlOutputFromFile('index').getContent();
   content = content.replace(
-    '<link rel="stylesheet" href="./style.css">',
+    /<link rel="stylesheet" href="\.\/style\.css(?:\?[^"]*)?">/,
     include_('Style')
   );
   content = content.replace(
