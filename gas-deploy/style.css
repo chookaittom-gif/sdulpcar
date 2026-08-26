@@ -40,35 +40,58 @@
   --calendar-card-border: #DCE3EF;
   --calendar-card-ink: #182033;
   --calendar-accent: #5368D8;
-  --calendar-event-approved: #16A34A;
-  --calendar-event-pending: #EA580C;
-  --calendar-event-rejected: #DC2626;
-  --calendar-event-cancelled: #64748B;
-  --calendar-event-driver-claimed: #0284C7;
-  --calendar-event-special: #7C3AED;
-  --calendar-event-driver-leave: #EA580C;
-  --calendar-event-driver-busy: #CA8A04;
-  --calendar-event-vehicle-repair: #991B1B;
-  --calendar-event-approved-tint: #DCFCE7;
-  --calendar-event-pending-tint: #FFEDD5;
-  --calendar-event-rejected-tint: #FEE2E2;
-  --calendar-event-cancelled-tint: #F1F5F9;
-  --calendar-event-driver-claimed-tint: #E0F2FE;
-  --calendar-event-special-tint: #EDE9FE;
-  --calendar-event-driver-leave-tint: #FFF1E5;
-  --calendar-event-driver-busy-tint: #FEF9C3;
-  --calendar-event-vehicle-repair-tint: #FEE2E2;
-  --calendar-total-tint: #EFF6FF;
+
+  /* Semantic Calendar Tokens (Single Source of Truth) */
+  --cal-approved-accent: #15803D;
+  --cal-approved-bg: linear-gradient(135deg, #15803D, #14532D);
+  --cal-approved-glow: rgba(21, 128, 61, 0.42);
+
+  --cal-pending-accent: #C2410C;
+  --cal-pending-bg: linear-gradient(135deg, #F59E0B, #D97706);
+  --cal-pending-glow: rgba(217, 119, 6, 0.42);
+
+  --cal-rejected-accent: #B91C1C;
+  --cal-rejected-bg: linear-gradient(135deg, #EF4444, #DC2626);
+  --cal-rejected-glow: rgba(220, 38, 38, 0.42);
+
+  --cal-cancelled-accent: #475569;
+  --cal-cancelled-bg: linear-gradient(135deg, #64748B, #475569);
+  --cal-cancelled-glow: rgba(100, 116, 139, 0.42);
+
+  --cal-total-accent: #1D4ED8;
+  --cal-total-bg: linear-gradient(135deg, #3B82F6, #1D4ED8);
+  --cal-total-glow: rgba(37, 99, 235, 0.42);
+
+  --cal-driver-claimed-accent: #0369A1;
+  --cal-driver-claimed-bg: linear-gradient(135deg, #0284C7, #0369A1);
+  --cal-driver-claimed-glow: rgba(2, 132, 199, 0.42);
+
+  --cal-special-accent: #6D28D9;
+  --cal-special-bg: linear-gradient(135deg, #8B5CF6, #6D28D9);
+  --cal-special-glow: rgba(139, 92, 246, 0.42);
+
+  --cal-leave-accent: #C2410C;
+  --cal-leave-bg: linear-gradient(135deg, #EA580C, #C2410C);
+  --cal-leave-glow: rgba(234, 88, 12, 0.42);
+
+  --cal-busy-accent: #A16207;
+  --cal-busy-bg: linear-gradient(135deg, #D97706, #B45309);
+  --cal-busy-glow: rgba(202, 138, 4, 0.42);
+
+  --cal-repair-accent: #7F1D1D;
+  --cal-repair-bg: linear-gradient(135deg, #B91C1C, #991B1B);
+  --cal-repair-glow: rgba(185, 28, 28, 0.42);
+
   --calendar-event-border: var(--calendar-card-border);
   --calendar-card-surface: #FFFFFF;
   --calendar-card-radius: 12px;
   --calendar-card-shadow: 0 2px 8px rgba(83, 104, 216, 0.08);
   --calendar-card-shadow-hover: 0 6px 16px rgba(83, 104, 216, 0.14);
   --calendar-event-shadow: var(--calendar-card-shadow);
-  --calendar-more-bg: #F0F3FF;
-  --calendar-more-bg-hover: #E5EAFE;
-  --calendar-more-border: #BFC9F6;
-  --calendar-more-ink: #3649AB;
+  --calendar-more-bg: #EFF6FF;
+  --calendar-more-bg-hover: #DBEAFE;
+  --calendar-more-border: #BFDBFE;
+  --calendar-more-ink: #1D4ED8;
   --radius-sm: 8px;
 
   /* ✅ SINGLE SOURCE: main container controls */
@@ -960,69 +983,69 @@ main.container {
 }
 
 .calendar-event.status-approved {
-  --event-accent: #15803D;
+  --event-accent: var(--cal-approved-accent);
   --event-border: rgba(255, 255, 255, 0.25);
-  --event-bg: linear-gradient(135deg, #16a34a, #15803d);
-  --event-glow: rgba(22, 163, 74, 0.45);
+  --event-bg: var(--cal-approved-bg);
+  --event-glow: var(--cal-approved-glow);
   --event-label-ink: rgba(255, 255, 255, 0.88);
 }
 .calendar-event.status-pending {
-  --event-accent: #C2410C;
+  --event-accent: var(--cal-pending-accent);
   --event-border: rgba(255, 255, 255, 0.25);
-  --event-bg: linear-gradient(135deg, #f59e0b, #d97706);
-  --event-glow: rgba(217, 119, 6, 0.45);
+  --event-bg: var(--cal-pending-bg);
+  --event-glow: var(--cal-pending-glow);
   --event-label-ink: rgba(255, 255, 255, 0.92);
 }
 .calendar-event.status-rejected {
-  --event-accent: #B91C1C;
+  --event-accent: var(--cal-rejected-accent);
   --event-border: rgba(255, 255, 255, 0.25);
-  --event-bg: linear-gradient(135deg, #ef4444, #dc2626);
-  --event-glow: rgba(220, 38, 38, 0.45);
+  --event-bg: var(--cal-rejected-bg);
+  --event-glow: var(--cal-rejected-glow);
   --event-label-ink: rgba(255, 255, 255, 0.88);
 }
 .calendar-event.status-cancelled {
-  --event-accent: #475569;
+  --event-accent: var(--cal-cancelled-accent);
   --event-border: rgba(255, 255, 255, 0.25);
-  --event-bg: linear-gradient(135deg, #64748b, #475569);
-  --event-glow: rgba(100, 116, 139, 0.45);
+  --event-bg: var(--cal-cancelled-bg);
+  --event-glow: var(--cal-cancelled-glow);
   --event-label-ink: rgba(255, 255, 255, 0.88);
 }
 .calendar-event.status-driver_claimed {
-  --event-accent: #0369A1;
+  --event-accent: var(--cal-driver-claimed-accent);
   --event-border: rgba(255, 255, 255, 0.25);
-  --event-bg: linear-gradient(135deg, #0284c7, #0369a1);
-  --event-glow: rgba(2, 132, 199, 0.45);
+  --event-bg: var(--cal-driver-claimed-bg);
+  --event-glow: var(--cal-driver-claimed-glow);
   --event-label-ink: rgba(255, 255, 255, 0.88);
 }
 .calendar-event.status-driver_special_approved {
-  --event-accent: #6D28D9;
+  --event-accent: var(--cal-special-accent);
   --event-border: rgba(255, 255, 255, 0.25);
-  --event-bg: linear-gradient(135deg, #8b5cf6, #6d28d9);
-  --event-glow: rgba(139, 92, 246, 0.45);
+  --event-bg: var(--cal-special-bg);
+  --event-glow: var(--cal-special-glow);
   --event-label-ink: rgba(255, 255, 255, 0.88);
 }
 .calendar-event.status-driver_block,
 .calendar-event.calendar-event--driver_leave {
-  --event-accent: #C2410C;
+  --event-accent: var(--cal-leave-accent);
   --event-border: rgba(255, 255, 255, 0.25);
-  --event-bg: linear-gradient(135deg, #ea580c, #c2410c);
-  --event-glow: rgba(234, 88, 12, 0.45);
+  --event-bg: var(--cal-leave-bg);
+  --event-glow: var(--cal-leave-glow);
   --event-label-ink: rgba(255, 255, 255, 0.88);
 }
 .calendar-event.calendar-event--driver_busy,
 .calendar-event.calendar-event--vehicle_busy {
-  --event-accent: #A16207;
+  --event-accent: var(--cal-busy-accent);
   --event-border: rgba(255, 255, 255, 0.25);
-  --event-bg: linear-gradient(135deg, #d97706, #b45309);
-  --event-glow: rgba(202, 138, 4, 0.45);
+  --event-bg: var(--cal-busy-bg);
+  --event-glow: var(--cal-busy-glow);
   --event-label-ink: rgba(255, 255, 255, 0.88);
 }
 .calendar-event.status-vehicle_block,
 .calendar-event.calendar-event--vehicle_repair {
-  --event-accent: #7F1D1D;
+  --event-accent: var(--cal-repair-accent);
   --event-border: rgba(255, 255, 255, 0.25);
-  --event-bg: linear-gradient(135deg, #b91c1c, #991b1b);
-  --event-glow: rgba(185, 28, 28, 0.45);
+  --event-bg: var(--cal-repair-bg);
+  --event-glow: var(--cal-repair-glow);
   --event-label-ink: rgba(255, 255, 255, 0.88);
 }
 .calendar-event.is-closed {
@@ -1232,8 +1255,16 @@ main.container {
   .more-events-btn { 
     height: 44px;
     min-height: 44px;
-    font-size: 0.6rem; 
+    font-size: 11.5px;
+    font-weight: 700;
     margin-top: auto;
+    background: var(--calendar-more-bg) !important;
+    color: var(--calendar-more-ink) !important;
+    border: 1px solid var(--calendar-more-border) !important;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 }
 
@@ -1302,11 +1333,11 @@ main.container {
   line-height: 1;
 }
 
-#calendar-kpi-bar .kpi-approved { --kpi-accent: #15803D; --kpi-bg: linear-gradient(135deg, #16a34a, #15803d); --kpi-glow: rgba(22, 163, 74, 0.45); }
-#calendar-kpi-bar .kpi-pending  { --kpi-accent: #C2410C; --kpi-bg: linear-gradient(135deg, #f59e0b, #d97706); --kpi-glow: rgba(217, 119, 6, 0.45); }
-#calendar-kpi-bar .kpi-rejected { --kpi-accent: #B91C1C; --kpi-bg: linear-gradient(135deg, #ef4444, #dc2626); --kpi-glow: rgba(220, 38, 38, 0.45); }
-#calendar-kpi-bar .kpi-cancelled{ --kpi-accent: #475569; --kpi-bg: linear-gradient(135deg, #64748b, #475569); --kpi-glow: rgba(100, 116, 139, 0.45); }
-#calendar-kpi-bar .kpi-total    { --kpi-accent: #1D4ED8; --kpi-bg: linear-gradient(135deg, #3b82f6, #1d4ed8); --kpi-glow: rgba(37, 99, 235, 0.45); }
+#calendar-kpi-bar .kpi-approved { --kpi-accent: var(--cal-approved-accent); --kpi-bg: var(--cal-approved-bg); --kpi-glow: var(--cal-approved-glow); }
+#calendar-kpi-bar .kpi-pending  { --kpi-accent: var(--cal-pending-accent); --kpi-bg: var(--cal-pending-bg); --kpi-glow: var(--cal-pending-glow); }
+#calendar-kpi-bar .kpi-rejected { --kpi-accent: var(--cal-rejected-accent); --kpi-bg: var(--cal-rejected-bg); --kpi-glow: var(--cal-rejected-glow); }
+#calendar-kpi-bar .kpi-cancelled{ --kpi-accent: var(--cal-cancelled-accent); --kpi-bg: var(--cal-cancelled-bg); --kpi-glow: var(--cal-cancelled-glow); }
+#calendar-kpi-bar .kpi-total    { --kpi-accent: var(--cal-total-accent); --kpi-bg: var(--cal-total-bg); --kpi-glow: var(--cal-total-glow); }
 
 #calendar-kpi-bar .kpi-chip:hover {
   transform: translateY(-2px);
@@ -1377,7 +1408,7 @@ main.container {
     -webkit-line-clamp: 1;
   }
 
-  .more-events-btn { font-size: 11px; }
+  .more-events-btn { font-size: 11.5px; font-weight: 700; }
 }
 
 @media (max-width: 420px) {
