@@ -14,7 +14,7 @@
     <!-- ⚡ PERF: Google Charts ย้ายเป็น lazy load — ไม่ block render อีกต่อไป -->
     <!-- โหลดเมื่อผู้ใช้เปิด Dashboard tab ดู script loadGoogleChartsOnDemand() ด้านล่าง -->
 
-    <link rel="stylesheet" href="./style.css?v=20260826_06">
+    <link rel="stylesheet" href="./style.css?v=20260826_07">
 </head>
 <body>
     <!-- ⚡ PERF Step 4: Static Inline Spinner — ผู้ใช้เห็นทันทีก่อน JS parse เสร็จ -->
@@ -152,6 +152,21 @@
                         <span style="font-weight: 700;">Live Radar</span>
                     </button>
                 </div>
+
+                <details class="cal-legend">
+                    <summary>สัญลักษณ์สีสถานะ</summary>
+                    <div class="cal-legend-items">
+                        <span class="cal-legend-item"><span class="cal-legend-swatch" style="background: var(--cal-approved-bg);"></span>อนุมัติ</span>
+                        <span class="cal-legend-item"><span class="cal-legend-swatch" style="background: var(--cal-pending-bg);"></span>รออนุมัติ</span>
+                        <span class="cal-legend-item"><span class="cal-legend-swatch" style="background: var(--cal-rejected-bg);"></span>ไม่อนุมัติ</span>
+                        <span class="cal-legend-item"><span class="cal-legend-swatch" style="background: var(--cal-cancelled-bg);"></span>ยกเลิก</span>
+                        <span class="cal-legend-item"><span class="cal-legend-swatch" style="background: var(--cal-driver-claimed-bg);"></span>คนขับรับงานแล้ว</span>
+                        <span class="cal-legend-item"><span class="cal-legend-swatch" style="background: var(--cal-special-bg);"></span>อนุมัติพิเศษ</span>
+                        <span class="cal-legend-item"><span class="cal-legend-swatch" style="background: var(--cal-leave-bg);"></span>พนักงานขับลา</span>
+                        <span class="cal-legend-item"><span class="cal-legend-swatch" style="background: var(--cal-busy-bg);"></span>ติดภารกิจ</span>
+                        <span class="cal-legend-item"><span class="cal-legend-swatch" style="background: var(--cal-repair-bg);"></span>รถซ่อมบำรุง</span>
+                    </div>
+                </details>
 
                 <div class="calendar-days">
                     <div class="day-label">อา</div>

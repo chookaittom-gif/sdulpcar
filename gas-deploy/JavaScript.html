@@ -3871,6 +3871,17 @@ function getResourceBlockRenderMeta(row) {
     };
 }
 
+// 🎨 CALENDAR_BLOCK_VARIANTS: ข้อมูลการแสดงผลของบล็อกทรัพยากรแต่ละประเภท
+// badgeBg/badgeColor เป็นคู่สีพาสเทลสำหรับแถวในตาราง (พื้นสว่าง) — mirror กับ token CSS
+// --cal-leave-* / --cal-busy-* / --cal-repair-* ใน src/style.css
+// ถ้าแก้สีตรงนี้ต้องแก้ token ฝั่ง CSS ให้ตรงกันด้วย
+const CALENDAR_BLOCK_VARIANTS = {
+    driver_leave:   { typeText: 'ลาพนักงานขับรถ', chipText: 'ลา',        iconText: '📌', badgeBg: '#fff7ed', badgeColor: '#c2410c' },
+    driver_busy:    { typeText: 'คนขับติดภารกิจ', chipText: 'ติดภารกิจ', iconText: '⏳', badgeBg: '#fffbeb', badgeColor: '#b45309' },
+    vehicle_repair: { typeText: 'นำรถไปซ่อม',     chipText: 'ซ่อม',      iconText: '🛠', badgeBg: '#fef2f2', badgeColor: '#991b1b' },
+    vehicle_busy:   { typeText: 'รถติดภารกิจ',    chipText: 'ติดภารกิจ', iconText: '⏳', badgeBg: '#fffbeb', badgeColor: '#b45309' }
+};
+
 function getResourceBlockRenderMeta(row) {
     const statusKey = String(
         typeof normalizeClientStatus === 'function'
@@ -3887,16 +3898,27 @@ function getResourceBlockRenderMeta(row) {
     const isDriverLeave = statusKey === 'driver_block' && (reasonLc.includes('ลา') || reasonLc.includes('พัก'));
     const isVehicleRepair = statusKey === 'vehicle_block' && (reasonLc.includes('ซ่อม') || reasonLc.includes('repair') || reasonLc.includes('maintenance'));
 
+    let variantKey = null;
+    let primaryText = '';
+    let secondaryText = '';
     if (statusKey === 'driver_block' && isDriverLeave) {
-        return { variantKey: 'driver_leave', typeText: 'ลาพนักงานขับรถ', chipText: 'ลา', iconText: '📌', badgeBg: '#fff7ed', badgeColor: '#c2410c', primaryText: driverName || 'ไม่ระบุพนักงานขับรถ', secondaryText: reasonText || 'บล็อกการลา' };
+        variantKey = 'driver_leave';
+        primaryText = driverName || 'ไม่ระบุพนักงานขับรถ';
+        secondaryText = reasonText || 'บล็อกการลา';
+    } else if (statusKey === 'driver_block') {
+        variantKey = 'driver_busy';
+        primaryText = driverName || 'ไม่ระบุพนักงานขับรถ';
+        secondaryText = reasonText || 'บล็อกการติดภารกิจ';
+    } else if (isVehicleRepair) {
+        variantKey = 'vehicle_repair';
+        primaryText = plateText || 'ไม่ระบุทะเบียนรถ';
+        secondaryText = assignedDriver ? ('ผู้นำรถไปซ่อม: ' + assignedDriver) : (reasonText || 'บล็อกรถซ่อม');
+    } else {
+        variantKey = 'vehicle_busy';
+        primaryText = plateText || 'ไม่ระบุทะเบียนรถ';
+        secondaryText = assignedDriver ? ('ผู้ดูแลรถ: ' + assignedDriver) : (reasonText || 'บล็อกรถติดภารกิจ');
     }
-    if (statusKey === 'driver_block') {
-        return { variantKey: 'driver_busy', typeText: 'คนขับติดภารกิจ', chipText: 'ติดภารกิจ', iconText: '⏳', badgeBg: '#fffbeb', badgeColor: '#b45309', primaryText: driverName || 'ไม่ระบุพนักงานขับรถ', secondaryText: reasonText || 'บล็อกการติดภารกิจ' };
-    }
-    if (isVehicleRepair) {
-        return { variantKey: 'vehicle_repair', typeText: 'นำรถไปซ่อม', chipText: 'ซ่อม', iconText: '🛠', badgeBg: '#fef2f2', badgeColor: '#991b1b', primaryText: plateText || 'ไม่ระบุทะเบียนรถ', secondaryText: assignedDriver ? ('ผู้นำรถไปซ่อม: ' + assignedDriver) : (reasonText || 'บล็อกรถซ่อม') };
-    }
-    return { variantKey: 'vehicle_busy', typeText: 'รถติดภารกิจ', chipText: 'ติดภารกิจ', iconText: '⏳', badgeBg: '#fffbeb', badgeColor: '#b45309', primaryText: plateText || 'ไม่ระบุทะเบียนรถ', secondaryText: assignedDriver ? ('ผู้ดูแลรถ: ' + assignedDriver) : (reasonText || 'บล็อกรถติดภารกิจ') };
+    return Object.assign({ variantKey, primaryText, secondaryText }, CALENDAR_BLOCK_VARIANTS[variantKey]);
 }
 
 function renderCalendar(year, month) {
@@ -4136,7 +4158,7 @@ function renderCalendar(year, month) {
                     assignedDriver: String(ev?.assignedDriver || '-') // 🍓 BERRY FIX: pass assignedDriver to tooltip
                 };
                 if (blockMeta) tooltipData.place = String(blockMeta.secondaryText || '-');
-                eventEl.setAttribute('title', accessibleEventText);
+                // ใช้ aria-label อย่างเดียว: title จะโผล่เป็น native tooltip ซ้อนทับ custom tooltip
                 eventEl.setAttribute('aria-label', accessibleEventText);
 
                 eventEl.addEventListener('mouseenter', function (e) { safeShowTooltip(e, tooltipData); });
