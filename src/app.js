@@ -4120,6 +4120,7 @@ function renderCalendar(year, month) {
 
                 const chipText = blockMeta ? blockMeta.chipText : typeText;
                 const titleText = blockMeta ? `${blockMeta.iconText || ''} ${projText}`.trim() : projText;
+                const accessibleEventText = [typeText, projText].filter(Boolean).join(' - ') || 'รายการกิจกรรม';
                 eventEl.innerHTML = `<span class="evt-chip">${escapeHtml(chipText)}</span>${titleText ? `<span class="evt-title">${escapeHtml(titleText)}</span>` : ''}`;
 
                 const tooltipData = {
@@ -4134,7 +4135,8 @@ function renderCalendar(year, month) {
                     assignedDriver: String(ev?.assignedDriver || '-') // 🍓 BERRY FIX: pass assignedDriver to tooltip
                 };
                 if (blockMeta) tooltipData.place = String(blockMeta.secondaryText || '-');
-                eventEl.setAttribute('aria-label', [typeText, projText].filter(Boolean).join(' — ') || 'รายการกิจกรรม');
+                eventEl.setAttribute('title', accessibleEventText);
+                eventEl.setAttribute('aria-label', accessibleEventText);
 
                 eventEl.addEventListener('mouseenter', function (e) { safeShowTooltip(e, tooltipData); });
                 eventEl.addEventListener('mousemove',  function (e) { safeMoveTooltip(e, tooltipData); });
@@ -4264,33 +4266,24 @@ function renderCalendarKPI(opts = {}) {
     const titleApproved = counts.driver_special_approved > 0 ? `อนุมัติ: ${counts.approved} | งานด่วน: ${counts.driver_special_approved}` : `อนุมัติแล้ว`;
 
     bar.innerHTML = `
-        <div class="kpi-chip kpi-approved" data-k="approved" title="${titleApproved}"><span class="kpi-ico">✅</span><span class="kpi-label">อนุมัติ</span><span class="kpi-num">0</span></div>
-        <div class="kpi-chip kpi-pending" data-k="pending" title="${titlePending}"><span class="kpi-ico">⏳</span><span class="kpi-label">รออนุมัติ</span><span class="kpi-num">0</span></div>
-        <div class="kpi-chip kpi-rejected" data-k="rejected" title="ไม่อนุมัติ"><span class="kpi-ico">❌</span><span class="kpi-label">ไม่อนุมัติ</span><span class="kpi-num">0</span></div>
-        <div class="kpi-chip kpi-cancelled" data-k="cancelled" title="ยกเลิก"><span class="kpi-ico">🚫</span><span class="kpi-label">ยกเลิก</span><span class="kpi-num">0</span></div>
-        <div class="kpi-chip kpi-total" data-k="total" title="ทั้งหมดเดือนนี้"><span class="kpi-ico">📦</span><span class="kpi-label">ทั้งหมด</span><span class="kpi-num">0</span></div>
+        <button type="button" class="kpi-chip kpi-approved" data-k="approved" title="${titleApproved}" aria-pressed="false"><span class="kpi-label">อนุมัติ</span><span class="kpi-num">${totalApproved}</span></button>
+        <button type="button" class="kpi-chip kpi-pending" data-k="pending" title="${titlePending}" aria-pressed="false"><span class="kpi-label">รออนุมัติ</span><span class="kpi-num">${totalPending}</span></button>
+        <button type="button" class="kpi-chip kpi-rejected" data-k="rejected" title="ไม่อนุมัติ" aria-pressed="false"><span class="kpi-label">ไม่อนุมัติ</span><span class="kpi-num">${counts.rejected}</span></button>
+        <button type="button" class="kpi-chip kpi-cancelled" data-k="cancelled" title="ยกเลิก" aria-pressed="false"><span class="kpi-label">ยกเลิก</span><span class="kpi-num">${counts.cancelled}</span></button>
+        <button type="button" class="kpi-chip kpi-total" data-k="total" title="ทั้งหมดเดือนนี้" aria-pressed="false"><span class="kpi-label">ทั้งหมด</span><span class="kpi-num">${total}</span></button>
     `;
-
-    requestAnimationFrame(() => {
-        bar.querySelectorAll('.kpi-chip').forEach((c, i) => {
-            c.style.setProperty('--i', i);
-            c.classList.add('pop-in');
-        });
-    });
-
-    animateNumber(bar.querySelector('.kpi-approved .kpi-num'), totalApproved);
-    animateNumber(bar.querySelector('.kpi-pending .kpi-num'), totalPending);
-    animateNumber(bar.querySelector('.kpi-rejected .kpi-num'), counts.rejected);
-    animateNumber(bar.querySelector('.kpi-cancelled .kpi-num'), counts.cancelled);
-    animateNumber(bar.querySelector('.kpi-total .kpi-num'), total);
 
     bar.onclick = (e) => {
         const chip = e.target.closest('.kpi-chip');
         if (!chip) return;
         const isActivating = !chip.classList.contains('active');
-        bar.querySelectorAll('.kpi-chip').forEach(c => c.classList.remove('active'));
+        bar.querySelectorAll('.kpi-chip').forEach(c => {
+            c.classList.remove('active');
+            c.setAttribute('aria-pressed', 'false');
+        });
         if (isActivating) {
             chip.classList.add('active');
+            chip.setAttribute('aria-pressed', 'true');
             highlightCalendarByStatus(chip.dataset.k);
         } else {
             highlightCalendarByStatus(null);
