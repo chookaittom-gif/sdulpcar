@@ -960,7 +960,9 @@ main.container {
   -webkit-appearance: none !important;
   background: var(--event-bg) !important;
   background-clip: padding-box !important;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
+  text-shadow: none !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06) !important;
   outline: none !important;
   text-decoration: none !important;
@@ -1062,14 +1064,19 @@ main.container {
   display: block;
   padding: 0;
   margin-bottom: 2px;
-  color: var(--event-label-ink) !important;
+  color: #FFFFFF !important;
+  opacity: 0.95;
   font-size: 11.5px;
   font-weight: 700;
   min-width: 0;
-  line-height: 1.1;
+  line-height: 1.15;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  letter-spacing: 0.2px;
+  text-shadow: none !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
 }
 
 .evt-title {
@@ -1080,8 +1087,11 @@ main.container {
   font-weight: 700;
   min-width: 0;
   overflow: hidden;
-  line-height: 1.2;
-  color: #0F172A !important;
+  line-height: 1.25;
+  color: #FFFFFF !important;
+  text-shadow: none !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
 }
 
 /* ===== More Button ===== */
@@ -1236,7 +1246,9 @@ main.container {
     font-weight: 700 !important;
     line-height: 1.2;
     color: #FFFFFF !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    text-shadow: none !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
   }
 
   .calendar-event {
@@ -1304,7 +1316,9 @@ main.container {
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08) !important;
   transform: none;
   opacity: 1;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2) !important;
+  text-shadow: none !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
   transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out);
   cursor: pointer;
   user-select: none;
@@ -1442,7 +1456,9 @@ main.container {
     font-size: 11.5px;
     font-weight: 700 !important;
     color: #FFFFFF !important;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+    text-shadow: none !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
   }
 }
 
