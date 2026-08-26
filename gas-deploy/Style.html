@@ -50,6 +50,16 @@
   --calendar-event-driver-leave: #C2410C;
   --calendar-event-driver-busy: #D97706;
   --calendar-event-vehicle-repair: #7F1D1D;
+  --calendar-event-approved-tint: #E9F7EF;
+  --calendar-event-pending-tint: #FFF4DE;
+  --calendar-event-rejected-tint: #FDEBE9;
+  --calendar-event-cancelled-tint: #EEF2F6;
+  --calendar-event-driver-claimed-tint: #EAF6FD;
+  --calendar-event-special-tint: #F1ECFF;
+  --calendar-event-driver-leave-tint: #FFF1E5;
+  --calendar-event-driver-busy-tint: #FFF7DA;
+  --calendar-event-vehicle-repair-tint: #FDEDED;
+  --calendar-total-tint: #EEF1FF;
   --calendar-event-border: var(--calendar-card-border);
   --calendar-card-surface: #FFFFFF;
   --calendar-card-radius: 12px;
@@ -948,18 +958,18 @@ main.container {
   outline-offset: 2px;
 }
 
-.calendar-event.status-approved { --event-accent: var(--calendar-event-approved); --event-tint: #ECFDF3; --event-label-ink: #166534; }
-.calendar-event.status-pending { --event-accent: var(--calendar-event-pending); --event-tint: #FFF8E7; --event-label-ink: #92400E; }
-.calendar-event.status-rejected { --event-accent: var(--calendar-event-rejected); --event-tint: #FFF1F0; --event-label-ink: #991B1B; }
-.calendar-event.status-cancelled { --event-accent: var(--calendar-event-cancelled); --event-tint: #F1F5F9; --event-label-ink: #334155; }
-.calendar-event.status-driver_claimed { --event-accent: var(--calendar-event-driver-claimed); --event-tint: #F0F9FF; }
-.calendar-event.status-driver_special_approved { --event-accent: var(--calendar-event-special); --event-tint: #F3EEFF; --event-label-ink: #5B21B6; }
-.calendar-event.status-driver_block { --event-accent: var(--calendar-event-driver-leave); --event-tint: #FFF7ED; }
-.calendar-event.status-vehicle_block { --event-accent: var(--calendar-event-vehicle-repair); --event-tint: #FEF2F2; }
-.calendar-event.calendar-event--driver_leave { --event-accent: var(--calendar-event-driver-leave); --event-tint: #FFF7ED; }
-.calendar-event.calendar-event--driver_busy { --event-accent: var(--calendar-event-driver-busy); --event-tint: #FFFBEB; }
-.calendar-event.calendar-event--vehicle_repair { --event-accent: var(--calendar-event-vehicle-repair); --event-tint: #FEF2F2; }
-.calendar-event.calendar-event--vehicle_busy { --event-accent: var(--calendar-event-driver-busy); --event-tint: #FFFBEB; }
+.calendar-event.status-approved { --event-accent: var(--calendar-event-approved); --event-tint: var(--calendar-event-approved-tint); --event-label-ink: #166534; }
+.calendar-event.status-pending { --event-accent: var(--calendar-event-pending); --event-tint: var(--calendar-event-pending-tint); --event-label-ink: #92400E; }
+.calendar-event.status-rejected { --event-accent: var(--calendar-event-rejected); --event-tint: var(--calendar-event-rejected-tint); --event-label-ink: #991B1B; }
+.calendar-event.status-cancelled { --event-accent: var(--calendar-event-cancelled); --event-tint: var(--calendar-event-cancelled-tint); --event-label-ink: #334155; }
+.calendar-event.status-driver_claimed { --event-accent: var(--calendar-event-driver-claimed); --event-tint: var(--calendar-event-driver-claimed-tint); --event-label-ink: #075985; }
+.calendar-event.status-driver_special_approved { --event-accent: var(--calendar-event-special); --event-tint: var(--calendar-event-special-tint); --event-label-ink: #5B21B6; }
+.calendar-event.status-driver_block { --event-accent: var(--calendar-event-driver-leave); --event-tint: var(--calendar-event-driver-leave-tint); --event-label-ink: #9A3412; }
+.calendar-event.status-vehicle_block { --event-accent: var(--calendar-event-vehicle-repair); --event-tint: var(--calendar-event-vehicle-repair-tint); --event-label-ink: #7F1D1D; }
+.calendar-event.calendar-event--driver_leave { --event-accent: var(--calendar-event-driver-leave); --event-tint: var(--calendar-event-driver-leave-tint); --event-label-ink: #9A3412; }
+.calendar-event.calendar-event--driver_busy { --event-accent: var(--calendar-event-driver-busy); --event-tint: var(--calendar-event-driver-busy-tint); --event-label-ink: #854D0E; }
+.calendar-event.calendar-event--vehicle_repair { --event-accent: var(--calendar-event-vehicle-repair); --event-tint: var(--calendar-event-vehicle-repair-tint); --event-label-ink: #7F1D1D; }
+.calendar-event.calendar-event--vehicle_busy { --event-accent: var(--calendar-event-driver-busy); --event-tint: var(--calendar-event-driver-busy-tint); --event-label-ink: #854D0E; }
 .calendar-event.is-closed {
   opacity: 0.6 !important;
   filter: grayscale(0.45) !important;
@@ -973,11 +983,12 @@ main.container {
 .evt-chip {
   display: block;
   padding: 0;
+  margin-bottom: 2px;
   color: var(--event-label-ink) !important;
   font-size: 11px;
   font-weight: 700;
   min-width: 0;
-  line-height: 1.05;
+  line-height: 1.1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -991,7 +1002,7 @@ main.container {
   font-weight: 600;
   min-width: 0;
   overflow: hidden;
-  line-height: 1.1;
+  line-height: 1.15;
   color: var(--calendar-card-ink) !important;
 }
 
@@ -1191,7 +1202,7 @@ main.container {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   min-height: 64px;
   padding: 10px 12px 9px;
   position: relative;
@@ -1232,11 +1243,11 @@ main.container {
   line-height: 1;
 }
 
-#calendar-kpi-bar .kpi-approved { --kpi-accent: var(--calendar-event-approved); --kpi-tint: #ECFDF3; --kpi-ink: #166534; }
-#calendar-kpi-bar .kpi-pending  { --kpi-accent: var(--calendar-event-pending); --kpi-tint: #FFF8E7; --kpi-ink: #92400E; }
-#calendar-kpi-bar .kpi-rejected { --kpi-accent: var(--calendar-event-rejected); --kpi-tint: #FFF1F0; --kpi-ink: #991B1B; }
-#calendar-kpi-bar .kpi-cancelled{ --kpi-accent: var(--calendar-event-cancelled); --kpi-tint: #F1F5F9; --kpi-ink: #334155; }
-#calendar-kpi-bar .kpi-total    { --kpi-accent: var(--calendar-accent); --kpi-tint: #F0F3FF; --kpi-ink: #3649AB; }
+#calendar-kpi-bar .kpi-approved { --kpi-accent: var(--calendar-event-approved); --kpi-tint: var(--calendar-event-approved-tint); --kpi-ink: #166534; }
+#calendar-kpi-bar .kpi-pending  { --kpi-accent: var(--calendar-event-pending); --kpi-tint: var(--calendar-event-pending-tint); --kpi-ink: #92400E; }
+#calendar-kpi-bar .kpi-rejected { --kpi-accent: var(--calendar-event-rejected); --kpi-tint: var(--calendar-event-rejected-tint); --kpi-ink: #991B1B; }
+#calendar-kpi-bar .kpi-cancelled{ --kpi-accent: var(--calendar-event-cancelled); --kpi-tint: var(--calendar-event-cancelled-tint); --kpi-ink: #334155; }
+#calendar-kpi-bar .kpi-total    { --kpi-accent: var(--calendar-accent); --kpi-tint: var(--calendar-total-tint); --kpi-ink: #3649AB; }
 
 #calendar-kpi-bar .kpi-chip:hover {
   border-color: var(--kpi-accent) !important;
