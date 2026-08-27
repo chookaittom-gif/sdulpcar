@@ -4696,9 +4696,26 @@ function prepareBookingPayload(form) {
   // 2. จัดการข้อมูล "ประเภทงาน" และ "งาน/โครงการ"
   const purposeSelect = document.getElementById('form-purpose');
   const projectNameInput = document.getElementById('booking-project-name');
+  const otherWorkTypeInput = document.getElementById('form-purpose-other');
 
   if (purposeSelect) {
       payload.workType = purposeSelect.value;
+      if (String(purposeSelect.value || '').trim() === 'อื่นๆ') {
+        const customWorkType = otherWorkTypeInput ? otherWorkTypeInput.value.trim() : '';
+        if (!customWorkType) {
+          if (otherWorkTypeInput) {
+            otherWorkTypeInput.required = true;
+            if (typeof otherWorkTypeInput.reportValidity === 'function') {
+              otherWorkTypeInput.reportValidity();
+            }
+            if (typeof otherWorkTypeInput.focus === 'function') {
+              otherWorkTypeInput.focus();
+            }
+          }
+          throw new Error('กรุณาระบุประเภทงานอื่นๆ');
+        }
+        payload.workType = customWorkType;
+      }
   }
   
   if (projectNameInput) {
@@ -4761,6 +4778,32 @@ function prepareBookingPayload(form) {
   return payload;
 }
 
+function setupBookingOtherWorkTypeField() {
+  const purposeSelect = document.getElementById('form-purpose');
+  const otherWrap = document.getElementById('form-purpose-other-wrap');
+  const otherInput = document.getElementById('form-purpose-other');
+  if (!purposeSelect || !otherWrap || !otherInput) return;
+
+  const sync = (shouldFocus) => {
+    const isOther = String(purposeSelect.value || '').trim() === 'อื่นๆ';
+    otherWrap.classList.toggle('hidden', !isOther);
+    otherInput.required = isOther;
+
+    if (!isOther) {
+      otherInput.value = '';
+    } else if (shouldFocus && typeof otherInput.focus === 'function') {
+      setTimeout(() => otherInput.focus(), 0);
+    }
+  };
+
+  if (purposeSelect.dataset.bookingOtherTypeWired !== 'true') {
+    purposeSelect.addEventListener('change', () => sync(true));
+    purposeSelect.dataset.bookingOtherTypeWired = 'true';
+  }
+
+  sync(false);
+}
+
 function prepareBookingForm() {
   // 1) ปิด Loading Overlay ที่อาจค้าง
   try { if (typeof hideLoading === 'function') hideLoading(); } catch (e) {}
@@ -4796,6 +4839,13 @@ function prepareBookingForm() {
 
   } catch (e) {
     console.warn('prepareBookingForm populate error:', e);
+  }
+
+  // 3.1) Wire Other Work Type Field Toggle
+  try {
+    setupBookingOtherWorkTypeField();
+  } catch (e) {
+    console.warn('setupBookingOtherWorkTypeField error:', e);
   }
 
   // 4) Auto Focus
