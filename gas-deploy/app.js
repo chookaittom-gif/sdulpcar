@@ -3355,13 +3355,17 @@ function setupDateInputs() {
   // 🍓 BERRY FIX: เพิ่ม insStart และ insEnd เพื่อให้ UI ฟอร์มประกันภัยแปลงเป็น พ.ศ. อัตโนมัติ
   const dateIds =['booking-date', 'return-date', 'startDate', 'endDate', 'maintStart', 'maintDone', 'maintNext', 'suspend-start', 'suspend-end', 'insStart', 'insEnd'];
 
-  // Helper: บังคับเปิดปฏิทิน Native ของเครื่อง
+  // Helper: บังคับเปิดปฏิทิน Native ของเครื่อง (Safe for Touch / Mobile & Desktop)
   const openPicker = (el) => {
     try {
-      el.type = 'date';
+      if (el.type !== 'date') {
+        el.type = 'date';
+      }
       if (el.dataset.iso) el.value = el.dataset.iso;
       if (el.id === 'return-date' && el.dataset.min) el.min = el.dataset.min;
-      if (el.showPicker) el.showPicker();
+      if (typeof el.showPicker === 'function') {
+        el.showPicker();
+      }
     } catch (_) {}
   };
 
@@ -3406,8 +3410,15 @@ function setupDateInputs() {
     const el = document.getElementById(id);
     if (!el) return;
 
+    // User Gesture Handler: เปิด Date Picker
     el.addEventListener('click', () => openPicker(el));
-    el.addEventListener('focus', () => openPicker(el));
+    el.addEventListener('focus', () => {
+      if (el.type !== 'date') {
+        el.type = 'date';
+        if (el.dataset.iso) el.value = el.dataset.iso;
+        if (el.id === 'return-date' && el.dataset.min) el.min = el.dataset.min;
+      }
+    });
     
     el.addEventListener('change', () => {
       if (el.type === 'date' && el.value) {
