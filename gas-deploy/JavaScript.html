@@ -5593,51 +5593,116 @@ function canShowEarlyCloseButton(booking) {
 
 window.canShowEarlyCloseButton = canShowEarlyCloseButton;
 
-async function showActivityDetails(bookingId, event) {
-  if (event) {
-    try { event.stopPropagation(); } catch (_) {}
-  }
-
+function renderActivityDetailsSkeleton(bookingId) {
   const id = String(bookingId || '').trim();
-  if (!id) return;
-
   const modal = document.getElementById('activity-modal');
   const details = document.getElementById('activity-details');
   const footer = document.getElementById('activity-modal-footer');
   const titleEl = document.getElementById('activity-title');
 
   if (!modal || !details) return;
-
   modal.classList.add('bx-modern-view');
 
-  if (typeof showLoading === 'function') showLoading();
-
-  let b = null;
-  try {
-    const runner = (typeof window.googleScriptRunLimited === 'function')
-      ? window.googleScriptRunLimited
-      : window.googleScriptRun;
-
-    const res = await runner('getById', id);
-    if (res && res.ok && res.data) {
-      b = res.data;
-      window.bookingsById = window.bookingsById || new Map();
-      window.bookingsById.set(id, b);
-    }
-  } catch (e) {
-    console.warn('[showActivityDetails] Fetch error:', e);
-  } finally {
-    if (typeof hideLoading === 'function') hideLoading();
+  if (titleEl) {
+    titleEl.innerHTML = `
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <span style="font-weight:700; font-size:1.15rem; line-height:1.2; word-break:break-word;">รายละเอียดการจอง ID: ${escapeHtml(id)}</span>
+        <div class="bx-skeleton-shimmer" style="width:75px; height:24px; border-radius:20px;"></div>
+      </div>
+    `;
   }
 
-  if (!b && window.bookingsById) {
-    b = window.bookingsById.get(id);
+  details.innerHTML = `
+    <div class="bx-container">
+      <div class="bx-top-grid">
+        <div class="bx-card bx-user-profile" style="display:flex; flex-direction:column; align-items:center; text-align:center; justify-content:center; padding:1.25rem 0.5rem;">
+          <div style="margin-bottom:8px;">
+            <div class="bx-skeleton-shimmer" style="width:64px; height:64px; border-radius:50%; margin:0 auto;"></div>
+          </div>
+          <div style="width:100%; display:flex; flex-direction:column; align-items:center; gap:6px; margin-bottom:8px;">
+            <div class="bx-skeleton-shimmer" style="width:50px; height:12px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:130px; height:16px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:90px; height:12px;"></div>
+          </div>
+          <div style="width:100%; border-top:1px dashed #e2e8f0; padding-top:8px; margin-top:auto; display:flex; flex-direction:column; align-items:center; gap:6px;">
+            <div class="bx-skeleton-shimmer" style="width:60px; height:12px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:100px; height:16px;"></div>
+          </div>
+        </div>
+
+        <div class="bx-card" style="display:flex; flex-direction:column; justify-content:center; gap:12px;">
+          <div style="background:#f8fafc; padding:10px 12px; border-radius:8px; border:1px solid #e2e8f0; display:flex; flex-direction:column; gap:6px;">
+            <div class="bx-skeleton-shimmer" style="width:80px; height:12px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:130px; height:16px;"></div>
+          </div>
+          <div style="padding:0 8px; display:flex; flex-direction:column; gap:6px;">
+            <div class="bx-skeleton-shimmer" style="width:90px; height:12px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:85%; height:16px;"></div>
+          </div>
+          <div style="border-top:1px solid #f1f5f9; margin:4px 0;"></div>
+          <div style="padding:0 8px; display:flex; flex-direction:column; gap:6px;">
+            <div class="bx-skeleton-shimmer" style="width:100px; height:12px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:75%; height:16px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bx-detail-grid">
+        <div class="bx-detail-item">
+          <div class="bx-skeleton-shimmer" style="width:48px; height:48px; border-radius:12px; flex-shrink:0;"></div>
+          <div style="display:flex; flex-direction:column; gap:6px; flex:1;">
+            <div class="bx-skeleton-shimmer" style="width:70px; height:12px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:110px; height:16px;"></div>
+          </div>
+        </div>
+        <div class="bx-detail-item">
+          <div class="bx-skeleton-shimmer" style="width:48px; height:48px; border-radius:12px; flex-shrink:0;"></div>
+          <div style="display:flex; flex-direction:column; gap:6px; flex:1;">
+            <div class="bx-skeleton-shimmer" style="width:70px; height:12px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:110px; height:16px;"></div>
+          </div>
+        </div>
+        <div class="bx-detail-item">
+          <div class="bx-skeleton-shimmer" style="width:48px; height:48px; border-radius:12px; flex-shrink:0;"></div>
+          <div style="display:flex; flex-direction:column; gap:6px; flex:1;">
+            <div class="bx-skeleton-shimmer" style="width:90px; height:12px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:100px; height:16px;"></div>
+          </div>
+        </div>
+        <div class="bx-detail-item">
+          <div class="bx-skeleton-shimmer" style="width:48px; height:48px; border-radius:12px; flex-shrink:0;"></div>
+          <div style="display:flex; flex-direction:column; gap:6px; flex:1;">
+            <div class="bx-skeleton-shimmer" style="width:80px; height:12px;"></div>
+            <div class="bx-skeleton-shimmer" style="width:60px; height:16px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  if (footer) {
+    footer.style.display = 'flex';
+    footer.style.flexWrap = 'wrap';
+    footer.style.gap = '8px';
+    footer.style.justifyContent = 'center';
+    footer.innerHTML = `<button class="btn bx-btn bx-btn-close" style="flex:1 1 auto; min-width:100px;" onclick="closeModalA11y('activity-modal')">ปิด</button>`;
   }
 
-  if (!b) {
-    if (typeof showToast === 'function') showToast(`ไม่พบข้อมูล ID: ${id}`, 'error');
-    return;
+  if (typeof openModalA11y === 'function') {
+    openModalA11y('activity-modal');
   }
+}
+
+function renderActivityDetailsContent(b) {
+  if (!b) return;
+  const id = String(b.bookingId || b.id || '').trim();
+  const modal = document.getElementById('activity-modal');
+  const details = document.getElementById('activity-details');
+  const footer = document.getElementById('activity-modal-footer');
+  const titleEl = document.getElementById('activity-title');
+
+  if (!modal || !details) return;
+  modal.classList.add('bx-modern-view');
 
   const statusKey = typeof normalizeClientStatus === 'function'
     ? normalizeClientStatus(b.status || 'pending')
@@ -5958,6 +6023,83 @@ async function showActivityDetails(bookingId, event) {
 
   openModalA11y('activity-modal');
 }
+
+async function showActivityDetails(bookingId, event) {
+  if (event) {
+    try { event.stopPropagation(); } catch (_) {}
+  }
+
+  const id = String(bookingId || '').trim();
+  if (!id) return;
+
+  window.__CURRENT_DETAIL_ID__ = id;
+
+  // 🚀 Step 1: Cache-First strategy (Render instantly if data is in memory)
+  let cached = (window.bookingsById && typeof window.bookingsById.get === 'function')
+    ? window.bookingsById.get(id)
+    : null;
+
+  if (cached) {
+    renderActivityDetailsContent(cached);
+
+    // Background SWR Revalidation (sync with latest server state without blocking UI)
+    try {
+      const runner = (typeof window.googleScriptRunLimited === 'function')
+        ? window.googleScriptRunLimited
+        : window.googleScriptRun;
+      if (typeof runner === 'function') {
+        runner('getById', id).then(res => {
+          if (res && res.ok && res.data) {
+            window.bookingsById = window.bookingsById || new Map();
+            window.bookingsById.set(id, res.data);
+            if (window.__CURRENT_DETAIL_ID__ === id) {
+              renderActivityDetailsContent(res.data);
+            }
+          }
+        }).catch(e => console.warn('[showActivityDetails] SWR background update error:', e));
+      }
+    } catch (e) {
+      console.warn('[showActivityDetails] Background fetch error:', e);
+    }
+    return;
+  }
+
+  // 🌀 Step 2: Cold Cache - Show in-modal Skeleton immediately
+  renderActivityDetailsSkeleton(id);
+
+  let b = null;
+  try {
+    const runner = (typeof window.googleScriptRunLimited === 'function')
+      ? window.googleScriptRunLimited
+      : window.googleScriptRun;
+
+    if (typeof runner === 'function') {
+      const res = await runner('getById', id);
+      if (res && res.ok && res.data) {
+        b = res.data;
+        window.bookingsById = window.bookingsById || new Map();
+        window.bookingsById.set(id, b);
+      }
+    }
+  } catch (e) {
+    console.warn('[showActivityDetails] Fetch error:', e);
+  }
+
+  if (!b && window.bookingsById && typeof window.bookingsById.get === 'function') {
+    b = window.bookingsById.get(id);
+  }
+
+  if (!b) {
+    if (typeof closeModalA11y === 'function') closeModalA11y('activity-modal');
+    if (typeof showToast === 'function') showToast(`ไม่พบข้อมูล ID: ${id}`, 'error');
+    return;
+  }
+
+  if (window.__CURRENT_DETAIL_ID__ === id) {
+    renderActivityDetailsContent(b);
+  }
+}
+
 
 // 🍓 BERRY FIX: UI Confirm ที่สวยงามสไตล์เดียวกับระบบ
 window.showCustomConfirm = function(title, text, confirmText = 'ยืนยัน', cancelText = 'ยกเลิก', confirmColor = '#16a34a') {
