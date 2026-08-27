@@ -4917,6 +4917,99 @@ footer.footer .developer {
 
 #radar-content .text-muted{ color:#94a3b8; font-size:.92rem; }
 
+.btn-quick-time.active {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #93c5fd;
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.15);
+}
+
+/* ==================== BOOKING DATETIME LAYOUT (IMPECCABLE POLISH) ==================== */
+.booking-datetime-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.booking-datetime-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  width: 100%;
+}
+
+.dt-subgroup {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  background: #ffffff;
+  padding: 0.85rem;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.dt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dt-field label {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #374151;
+  line-height: 1.25;
+}
+
+.dt-field .label-hint {
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.dt-field input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-family: 'Sarabun', sans-serif;
+  font-weight: 500;
+  color: #111827;
+  background: #ffffff;
+  padding: 0.6rem 0.75rem;
+  line-height: 1.35;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  box-sizing: border-box;
+}
+
+.dt-field input:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+}
+
+.booking-quick-time-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.quick-time-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #64748b;
+}
+
 /* 🍓 BERRY FIX: เคลียร์ Media Queries เก่าที่ Hardcode px ทิ้ง ให้ Flexbox จัดการเองแบบ Fluid */
 @media (max-width:768px){
   /* BUGFIX: width เต็ม viewport + ห้าม horizontal overflow */

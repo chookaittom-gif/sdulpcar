@@ -868,24 +868,43 @@
                   <input type="text" id="booking-destination" name="destination" required>
                 </div>
 
-                <div class="form-group">
-                  <label for="booking-date">วันที่ไป *</label>
-                  <input type="text" id="booking-date" name="startDate" placeholder="dd/mm/yyyy" required autocomplete="off">
-                </div>
+                <!-- วันและเวลาเดินทาง (จัดกลุ่มสมมาตร 2x2 พร้อมปุ่มเลือกเวลาด่วน) -->
+                <div class="form-group full-width booking-datetime-card">
+                  <div class="booking-datetime-grid">
+                    <!-- ขาไป -->
+                    <div class="dt-subgroup">
+                      <div class="dt-field">
+                        <label for="booking-date">วันที่ไป *</label>
+                        <input type="text" id="booking-date" name="startDate" placeholder="dd/mm/yyyy" required autocomplete="off">
+                      </div>
+                      <div class="dt-field">
+                        <label for="booking-start">เวลาไป * <span class="label-hint">(เช่น 08:30)</span></label>
+                        <input type="time" id="booking-start" name="startTime" required>
+                      </div>
+                    </div>
 
-                <div class="form-group">
-                  <label for="booking-start">เวลาไป * <span class="label-hint">(24 ชม. เช่น 13:00)</span></label>
-                  <input type="time" id="booking-start" name="startTime" required>
-                </div>
+                    <!-- ขากลับ -->
+                    <div class="dt-subgroup">
+                      <div class="dt-field">
+                        <label for="return-date">วันที่กลับ *</label>
+                        <input type="text" id="return-date" name="endDate" placeholder="dd/mm/yyyy" required autocomplete="off">
+                      </div>
+                      <div class="dt-field">
+                        <label for="booking-end">เวลากลับ * <span class="label-hint">(เช่น 16:30)</span></label>
+                        <input type="time" id="booking-end" name="endTime" required>
+                      </div>
+                    </div>
+                  </div>
 
-                <div class="form-group">
-                  <label for="return-date">วันที่กลับ *</label>
-                  <input type="text" id="return-date" name="endDate" placeholder="dd/mm/yyyy" required autocomplete="off">
-                </div>
-
-                <div class="form-group">
-                  <label for="booking-end">เวลากลับ * <span class="label-hint">(24 ชม. เช่น 13:00)</span></label>
-                  <input type="time" id="booking-end" name="endTime" required>
+                  <!-- ปุ่มเลือกเวลาด่วน (Quick Presets) -->
+                  <div class="booking-quick-time-wrapper" id="booking-quick-time-wrapper">
+                    <span class="quick-time-title">⚡ เลือกช่วงเวลาด่วน:</span>
+                    <div class="quick-time-grid">
+                      <button type="button" class="btn-quick-time" data-booking-time="morning">ช่วงเช้า (08:30 - 12:00)</button>
+                      <button type="button" class="btn-quick-time" data-booking-time="afternoon">ช่วงบ่าย (13:00 - 16:30)</button>
+                      <button type="button" class="btn-quick-time" data-booking-time="allday">เต็มวัน (08:30 - 16:30)</button>
+                    </div>
+                  </div>
                 </div>
 
                 <div class="form-group full-width">

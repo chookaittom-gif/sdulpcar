@@ -998,6 +998,50 @@ function wireSuspendQuickTimeButtonsOnce() {
 // 🍓 BERRY FIX: Export ลง Global Scope ให้ safeCall หาเจอ
 window.wireSuspendQuickTimeButtonsOnce = wireSuspendQuickTimeButtonsOnce;
 
+/* ANCHOR: wireBookingQuickTimeButtonsOnce */
+function wireBookingQuickTimeButtonsOnce() {
+  const wrapper = document.getElementById('booking-quick-time-wrapper');
+  const stEl = document.getElementById('booking-start');
+  const etEl = document.getElementById('booking-end');
+  if (!wrapper || !stEl || !etEl) return;
+
+  if (window.vberryBookingQuickTimeWired) return;
+  window.vberryBookingQuickTimeWired = true;
+
+  const btns = wrapper.querySelectorAll('.btn-quick-time');
+  const clearActive = () => btns.forEach(b => b.classList.remove('active'));
+
+  btns.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      clearActive();
+      btn.classList.add('active');
+      const timeType = btn.dataset.bookingTime;
+
+      if (timeType === 'morning') {
+        stEl.value = '08:30';
+        etEl.value = '12:00';
+      } else if (timeType === 'afternoon') {
+        stEl.value = '13:00';
+        etEl.value = '16:30';
+      } else if (timeType === 'allday') {
+        stEl.value = '08:30';
+        etEl.value = '16:30';
+      }
+
+      // Trigger change event to invoke vehicle availability lookup
+      stEl.dispatchEvent(new Event('change', { bubbles: true }));
+      etEl.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
+
+  const handleManualTimeInput = () => clearActive();
+  stEl.addEventListener('input', handleManualTimeInput);
+  etEl.addEventListener('input', handleManualTimeInput);
+}
+window.wireBookingQuickTimeButtonsOnce = wireBookingQuickTimeButtonsOnce;
+
+
 // ANCHOR: executeToggle
 // 🍓 BERRY FIX v2: sync ทั้ง AdminPanel + Radar หลัง toggle สำเร็จ
 window.executeToggle = async function(type, id, nextActive, btn) {
@@ -3185,6 +3229,7 @@ function initUiComponents() {
     safeCall('wireVehicleCountClamp', 'Vehicle Count Clamp');
     safeCall('installSelfTestFloatingButton', 'Self-Test Button');
     safeCall('wireSuspendQuickTimeButtonsOnce', 'Suspend Quick Time Buttons');
+    safeCall('wireBookingQuickTimeButtonsOnce', 'Booking Quick Time Buttons');
 
     console.log('✅ initUiComponents(): All phases complete.');
   };
@@ -4845,6 +4890,11 @@ function prepareBookingForm() {
   // 3.1) Wire Other Work Type Field Toggle
   try {
     setupBookingOtherWorkTypeField();
+  } catch (e) {
+    console.warn('setupBookingOtherWorkTypeField error:', e);
+  }
+  try {
+    wireBookingQuickTimeButtonsOnce();
   } catch (e) {
     console.warn('setupBookingOtherWorkTypeField error:', e);
   }
