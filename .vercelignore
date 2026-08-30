@@ -3,17 +3,12 @@
 .codex/
 .cursor/
 .agents/
-.superpowers/
 .clasp.json
 .claspignore
-docs/
 backup-duplicate-review-*/
 9arm-skills/
 apikey/
 agent/
 tto
 repomix-output.xml
-CONTEXT.md
-DESIGN.md
-PRODUCT.md
 .env*

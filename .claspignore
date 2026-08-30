@@ -19,8 +19,6 @@ apikey/**
 agent/**
 
 # Ignore design docs
-PRODUCT.md
-DESIGN.md
 README.md
 
 # Ignore clasp config files
