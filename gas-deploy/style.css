@@ -969,9 +969,11 @@ main.container {
   transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out), filter var(--dur-fast) var(--ease-out);
 }
 
-.calendar-event:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px var(--event-glow, rgba(0, 0, 0, 0.22)) !important;
+@media (hover: hover) {
+  .calendar-event:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px var(--event-glow, rgba(0, 0, 0, 0.22)) !important;
+  }
 }
 
 .calendar-event:active { transform: translateY(1px); }
@@ -1097,31 +1099,29 @@ main.container {
 /* ===== More Button ===== */
 .more-events-btn {
   font-family: 'Noto Sans Thai', 'Sarabun', sans-serif !important;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 700;
   color: var(--calendar-more-ink) !important;
   background: var(--calendar-more-bg) !important;
   border: 1px solid var(--calendar-more-border) !important;
-  border-radius: var(--calendar-card-radius);
+  border-radius: 6px;
   text-align: center;
-  height: 44px;
-  min-height: 44px;
+  height: 32px;
+  min-height: 32px;
   width: 100%;
   min-width: 0;
-  padding: 8px 4px;
-  line-height: 26px;
+  padding: 0 6px;
+  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   margin-top: auto;
-  border: 1px solid var(--calendar-more-border) !important;
   appearance: none !important;
   -webkit-appearance: none !important;
   opacity: 1 !important;
   filter: none !important;
   box-shadow: none !important;
-  font-family: inherit !important;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1136,10 +1136,12 @@ main.container {
   white-space: nowrap;
 }
 
-.more-events-btn:hover {
-  background: var(--calendar-more-bg-hover) !important;
-  border-color: var(--calendar-accent) !important;
-  box-shadow: 0 4px 12px rgba(83, 104, 216, 0.12) !important;
+@media (hover: hover) {
+  .more-events-btn:hover {
+    background: var(--calendar-more-bg-hover) !important;
+    border-color: var(--calendar-accent) !important;
+    box-shadow: 0 4px 12px rgba(83, 104, 216, 0.12) !important;
+  }
 }
 
 .more-events-btn:active {
@@ -1322,6 +1324,26 @@ main.container {
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+}
+
+
+/* 📱 Small Mobile (<= 480px): Compact Scale */
+@media (max-width: 480px) {
+  .calendar-day {
+    height: 140px;
+    min-height: 140px;
+    max-height: 140px;
+  }
+  .calendar-event {
+    height: 36px;
+    min-height: 36px;
+    padding: 3px 2px 3px 4px;
+  }
+  .more-events-btn {
+    height: 36px;
+    min-height: 36px;
+    font-size: 10.5px;
   }
 }
 
