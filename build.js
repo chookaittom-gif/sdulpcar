@@ -26,6 +26,7 @@ try {
   };
 
   // 4. บิวด์หุ้มสำหรับ Google Apps Script
+  wrapAndSave('src/config.js', 'config.html', 'script');
   wrapAndSave('src/app.js', 'JavaScript.html', 'script');
   wrapAndSave('src/gviz-service.js', 'gviz-service.html', 'script');
   wrapAndSave('src/style.css', 'Style.html', 'style');

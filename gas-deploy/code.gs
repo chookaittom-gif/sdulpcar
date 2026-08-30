@@ -226,10 +226,10 @@ function _renderWebAppIndex_() {
     /<link rel="stylesheet" href="\.\/style\.css(?:\?[^"]*)?">/,
     include_('Style')
   );
-  content = content.replace(
-    '        <script src="./config.js"></script>\n        <script src="./gviz-service.js"></script>\n        <script src="./app.js"></script>',
-    include_('gviz-service') + '\n' + include_('JavaScript')
-  );
+  content = content
+    .replace(/<script\s+src=["']\.\/config\.js["']><\/script>/, include_('config'))
+    .replace(/<script\s+src=["']\.\/gviz-service\.js["']><\/script>/, include_('gviz-service'))
+    .replace(/<script\s+src=["']\.\/app\.js["']><\/script>/, include_('JavaScript'));
 
   return HtmlService.createHtmlOutput(content)
     .setTitle('ระบบจองยานพาหนะ มหาวิทยาลัยสวนดุสิต ศูนย์การศึกษาลำปาง')
