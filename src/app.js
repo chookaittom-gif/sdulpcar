@@ -7807,9 +7807,42 @@ function statusToClass(st){
   return 'pending';
 }
 
+// ==================== TIMELINE VIEW (MODERN GANTT FLEET) ====================
+function updateTimelineDateHeader_(date) {
+  const d = (date instanceof Date && !isNaN(date.getTime())) ? date : new Date();
+  const titleEl = document.getElementById('timeline-date');
+  const todayBtn = document.getElementById('btn-timeline-today');
+
+  const now = new Date();
+  const isToday = (d.getFullYear() === now.getFullYear() &&
+                   d.getMonth() === now.getMonth() &&
+                   d.getDate() === now.getDate());
+
+  if (todayBtn) {
+    todayBtn.style.display = isToday ? 'none' : 'inline-block';
+  }
+
+  if (titleEl) {
+    const thaiMonths = [
+      'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+      'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
+    ];
+    const thaiDays = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
+    const dayName = thaiDays[d.getDay()];
+    const dd = d.getDate();
+    const mm = thaiMonths[d.getMonth()];
+    const yyyy = d.getFullYear() + 543;
+    const todayTag = isToday ? ' (วันนี้)' : '';
+    titleEl.textContent = `🗓️ ไทม์ไลน์ วัน${dayName} ${dd} ${mm} ${yyyy}${todayTag}`;
+  }
+}
+
 async function loadTimelineView() {
   try {
-    const dateISO = dateToISO(window.currentTimelineDate || new Date());
+    const targetDate = window.currentTimelineDate || new Date();
+    updateTimelineDateHeader_(targetDate);
+
+    const dateISO = dateToISO(targetDate);
     const selEl = document.getElementById('timeline-plate');
     const selectedPlateRaw = (selEl && selEl.value) ? selEl.value : '';
     const selectedPlate = normPlate(selectedPlateRaw);
@@ -7819,7 +7852,8 @@ async function loadTimelineView() {
     if (window.timelineCache && window.timelineCache.key === cacheKey && window.timelineCache.data) {
       renderTimelineGrid(
         Array.isArray(window.timelineCache.data.bookings) ? window.timelineCache.data.bookings : [],
-        selectedPlate
+        selectedPlate,
+        Array.isArray(window.timelineCache.data.plates) ? window.timelineCache.data.plates : []
       );
       return;
     }
@@ -7872,7 +7906,11 @@ async function loadTimelineView() {
       selEl.onchange = function () { loadTimelineView(); };
     }
 
-    renderTimelineGrid(Array.isArray(res.bookings) ? res.bookings : [], selectedPlate);
+    renderTimelineGrid(
+      Array.isArray(res.bookings) ? res.bookings : [],
+      selectedPlate,
+      Array.isArray(res.plates) ? res.plates : []
+    );
     
   } catch (e) {
     // 🍓 BERRY FIX 4: ถ้าเกิด Error กลางคัน (ตก Catch) ต้องปลดล็อก UI ป้องกันหน้าจอค้างยาว
@@ -7890,36 +7928,74 @@ async function loadTimelineView() {
   }
 }
 
-function renderTimelineGrid(bookings, selectedPlate){
+function renderTimelineGrid(bookings, selectedPlate, allPlates){
   const grid = document.getElementById('timeline-grid');
   if(!grid) return;
 
   const wantPlate = normPlate(selectedPlate || '');
 
-  // ✅ ตัดข้อมูล plate ว่าง/ "-" ทิ้งเสมอ
+  // 1. กรองเฉพาะรายการที่ทะเบียนไม่ว่าง
   const cleaned = (Array.isArray(bookings) ? bookings : []).filter(b=>{
     const p = normPlate(b && b.plate);
     if (isEmptyPlate(p)) return false;
-    // ถ้ามีการเลือกทะเบียน ให้โชว์เฉพาะทะเบียนนั้น
     if (wantPlate) return p === wantPlate;
     return true;
   });
 
-  if(cleaned.length === 0){
-    grid.innerHTML = '<div class="empty-state"><div class="icon">ℹ️</div><div>ยังไม่มีงานในวันนี้</div></div>';
+  // 2. รวบรวมรายการรถทั้งหมดที่จะแสดง
+  let targetPlates = [];
+  if (wantPlate) {
+    targetPlates = [wantPlate];
+  } else if (Array.isArray(allPlates) && allPlates.length > 0) {
+    targetPlates = allPlates.map(normPlate).filter(p => !isEmptyPlate(p));
+    cleaned.forEach(b => {
+      const p = normPlate(b.plate);
+      if (p && !targetPlates.includes(p)) targetPlates.push(p);
+    });
+  } else {
+    cleaned.forEach(b => {
+      const p = normPlate(b.plate);
+      if (p && !targetPlates.includes(p)) targetPlates.push(p);
+    });
+  }
+
+  targetPlates = Array.from(new Set(targetPlates));
+
+  if (targetPlates.length === 0) {
+    grid.innerHTML = '<div class="empty-state"><div class="icon">🚐</div><div>ยังไม่มีข้อมูลยานพาหนะในระบบ</div></div>';
     return;
   }
 
+  // 3. จัดกลุ่มงานตามทะเบียนรถ
   const byPlate = new Map();
-  cleaned.forEach(b=>{
+  cleaned.forEach(b => {
     const p = normPlate(b.plate);
-    if(!byPlate.has(p)) byPlate.set(p, []);
+    if (!byPlate.has(p)) byPlate.set(p, []);
     byPlate.get(p).push(b);
   });
 
+  // 4. คำนวณเวลาปัจจุบันถ้าวันที่ที่เลือกคือวันนี้
+  const curDate = window.currentTimelineDate || new Date();
+  const todayDate = new Date();
+  const isToday = (curDate.getFullYear() === todayDate.getFullYear() &&
+                   curDate.getMonth() === todayDate.getMonth() &&
+                   curDate.getDate() === todayDate.getDate());
+
+  let nowPct = -1;
+  let nowTimeStr = '';
+  if (isToday) {
+    const nowM = (todayDate.getHours() * 60) + todayDate.getMinutes();
+    if (typeof TL_START_MIN !== 'undefined' && typeof TL_END_MIN !== 'undefined' && typeof TL_SPAN_MIN !== 'undefined') {
+      if (nowM >= TL_START_MIN && nowM <= TL_END_MIN) {
+        nowPct = ((nowM - TL_START_MIN) / TL_SPAN_MIN) * 100;
+        nowTimeStr = fmt2(todayDate.getHours()) + ':' + fmt2(todayDate.getMinutes()) + ' น.';
+      }
+    }
+  }
+
   let html = '';
-  byPlate.forEach((list, plate)=>{
-    // เรียงในแถวเดียวกันจากเวลาเริ่มก่อน → หลัง (ถ้าเท่ากันเอาเวลาจบ)
+  targetPlates.forEach(plate => {
+    const list = byPlate.get(plate) || [];
     list.sort((a,b)=>{
       const as = timeToMin(a.startTime), bs = timeToMin(b.startTime);
       if (as !== bs) return as - bs;
@@ -7928,48 +8004,52 @@ function renderTimelineGrid(bookings, selectedPlate){
       return ae - be;
     });
 
+    const carType = (list[0] && list[0].carType) ? list[0].carType : '';
+
     html += `
       <div class="timeline-row">
         <div class="vehicle-label">
           <span class="vehicle-icon">🚐</span>
-          <span class="vehicle-name">${escapeHtml(plate || '-')}</span>
+          <div class="vehicle-details">
+            <span class="vehicle-name">${escapeHtml(plate || '-')}</span>
+            ${carType ? `<span class="vehicle-type">${escapeHtml(carType)}</span>` : ''}
+          </div>
         </div>
         <div class="timeline-track">
-          
-          ${(function(){
-            const d = new Date();
-            const nowM = (d.getHours() * 60) + d.getMinutes();
-            // ตรวจสอบว่ามีตัวแปรเวลาอยู่จริงและเวลาปัจจุบันอยู่ในช่วงที่แสดงผลหรือไม่
-            if(typeof TL_START_MIN !== 'undefined' && typeof TL_END_MIN !== 'undefined' && typeof TL_SPAN_MIN !== 'undefined') {
-              if(nowM >= TL_START_MIN && nowM <= TL_END_MIN) {
-                const leftPct = ((nowM - TL_START_MIN) / TL_SPAN_MIN) * 100;
-                // ✅ เอา \ หน้า ` ออกเพื่อให้ Syntax ทำงานถูกต้อง
-                return `<div class="current-time-line" style="left:${leftPct}%;"></div>`;
-              }
-            }
-            return '';
-          })()}
+          ${nowPct >= 0 ? `
+            <div class="current-time-line" style="left:${nowPct}%;" title="เวลาปัจจุบัน ${nowTimeStr}">
+              
+            </div>
+          ` : ''}
 
-          ${list.map(b=>{
+          ${list.length === 0 ? `
+            <div class="timeline-free-lane">
+              <span class="free-indicator">●</span>
+              <span class="free-text">ว่างตลอดทั้งวัน (พร้อมปฏิบัติงาน)</span>
+            </div>
+          ` : list.map(b => {
             const sMin = clamp(timeToMin(b.startTime), TL_START_MIN, TL_END_MIN);
             const rawEnd = b.endTime || b.startTime;
             const eMin = clamp(timeToMin(rawEnd), TL_START_MIN, TL_END_MIN);
             const leftPct = ((sMin - TL_START_MIN) / TL_SPAN_MIN) * 100;
-            const widthPct = Math.max(2, ((Math.max(eMin, sMin+30) - sMin) / TL_SPAN_MIN) * 100);
+            const widthPct = Math.max(3.2, ((Math.max(eMin, sMin + 25) - sMin) / TL_SPAN_MIN) * 100);
 
             const cls = statusToClass(b.status);
-            const title = `${escapeHtml(b.startTime)}-${escapeHtml(rawEnd)}  ${escapeHtml(b.name||'')}`;
+            const statusMap = { approved: 'อนุมัติ', pending: 'รออนุมัติ', rejected: 'ไม่อนุมัติ', cancelled: 'ยกเลิก' };
+            const statusTh = statusMap[cls] || 'รออนุมัติ';
+            const dest = toStr(b.destination) || toStr(b.purpose) || 'ภารกิจ';
+            const driver = toStr(b.driver);
+            const title = `${escapeHtml(b.startTime)}-${escapeHtml(rawEnd)} ${escapeHtml(dest)} [${statusTh}]`;
 
-            // ✅ เอา \ หน้า ` และหน้า $ ออกทั้งหมด เพื่อป้องกัน Syntax Error
             return `
               <div class="timeline-booking ${cls}" title="${title}"
-                   onclick="if(typeof showActivityDetails === 'function') showActivityDetails('${escapeHtml(b.bookingId||'')}')"
+                   onclick="if(typeof showActivityDetails === 'function') showActivityDetails('${escapeHtml(b.bookingId || '')}')"
+                   onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();if(typeof showActivityDetails === 'function') showActivityDetails('${escapeHtml(b.bookingId || '')}');}"
                    role="button" tabindex="0"
                    style="left:${leftPct}%; width:${widthPct}%;">
-
-                <div class="booking-title">${escapeHtml(b.purpose||'งาน')}</div>
-                <div class="booking-time">${escapeHtml(b.startTime)}-${escapeHtml(rawEnd)}</div>
-                <div class="booking-meta">ID: ${escapeHtml(b.bookingId||'')}</div>
+                <div class="booking-time">⏰ ${escapeHtml(b.startTime)}-${escapeHtml(rawEnd)}</div>
+                <div class="booking-title">${escapeHtml(dest)}</div>
+                ${driver ? `<div class="booking-meta">👤 ${escapeHtml(driver)}</div>` : ''}
               </div>`;
           }).join('')}
         </div>
@@ -7978,22 +8058,37 @@ function renderTimelineGrid(bookings, selectedPlate){
   });
 
   grid.innerHTML = html;
+
+  // วาด Marker เวลาปัจจุบันที่หัวตารางชั่วโมงเพียงจุดเดียว (กันรก)
+  const hoursTrack = document.getElementById('timeline-hours-track');
+  if (hoursTrack) {
+    const oldMarker = hoursTrack.querySelector('.current-time-header-marker');
+    if (oldMarker) oldMarker.remove();
+
+    if (nowPct >= 0) {
+      const marker = document.createElement('div');
+      marker.className = 'current-time-header-marker';
+      marker.style.left = nowPct + '%';
+      marker.innerHTML = '<span class="current-time-badge">' + escapeHtml(nowTimeStr) + '</span>';
+      hoursTrack.appendChild(marker);
+    }
+  }
 }
 
-function changeTimelineDate(deltaDays) {
+function changeTimelineDate(deltaDays, isTodayReset) {
   var base = (window.currentTimelineDate instanceof Date && !isNaN(window.currentTimelineDate.getTime()))
     ? new Date(window.currentTimelineDate.getTime())
     : new Date();
 
-  base.setDate(base.getDate() + (parseInt(deltaDays, 10) || 0));
+  if (isTodayReset) {
+    base = new Date();
+  } else {
+    base.setDate(base.getDate() + (parseInt(deltaDays, 10) || 0));
+  }
   window.currentTimelineDate = base;
 
-  const lbl = document.getElementById('current-timeline-date');
-  if (lbl) {
-    const dd = String(base.getDate()).padStart(2, '0');
-    const mm = String(base.getMonth() + 1).padStart(2, '0');
-    const yyyy = base.getFullYear() + 543;
-    lbl.textContent = dd + '/' + mm + '/' + yyyy;
+  if (typeof updateTimelineDateHeader_ === 'function') {
+    updateTimelineDateHeader_(base);
   }
 
   if (typeof window.loadTimelineView === 'function') {
@@ -8004,7 +8099,6 @@ function changeTimelineDate(deltaDays) {
     console.error('🍓 [V-Berry] ไม่พบฟังก์ชัน loadTimelineView() ในระบบค่ะ');
   }
 }
-
 
 window.SHOW_PERF_LOGS = true;
 function logPerfMeasures_() {

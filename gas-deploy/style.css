@@ -3317,165 +3317,336 @@ footer.footer .developer {
   gap: 1rem;
 }
 
-/* ==================== TIMELINE (BERRY OPTIMIZED) ==================== */
+/* ==================== TIMELINE (MODERN GANTT FLEET) ==================== */
 .timeline-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.25rem;
   flex-wrap: wrap;
   gap: 1rem;
 }
 
-.timeline-title {
-  font-size: 1.25rem;
-  text-align: center;
+.timeline-date-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
   flex-grow: 1;
+}
+
+.timeline-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--dark, #1f2937);
+  margin: 0;
+  text-align: center;
+}
+
+.btn-primary-light {
+  background: rgba(102, 126, 234, 0.15);
+  color: var(--primary, #667eea);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-primary-light:hover {
+  background: var(--primary, #667eea);
+  color: #ffffff;
 }
 
 .timeline-container {
   width: 100%;
+  border: 1px solid var(--gray-medium, #e2e8f0);
+  border-radius: var(--radius, 12px);
+  background: #ffffff;
   overflow-x: auto;
-  border: 1px solid var(--gray-medium);
-  border-radius: var(--radius);
-  background: var(--light);
   -webkit-overflow-scrolling: touch;
-  position: relative;
-  /* 🍓 BERRY FIX: ควบคุมความสูงให้ Scroll แนวตั้งได้ในตัว เพื่อให้ Header เหนียวแน่น (Sticky) */
   max-height: 65vh;
   overflow-y: auto;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
 }
 
-.timeline-hours {
-  display: grid;
-  grid-template-columns: repeat(8, minmax(100px, 1fr));
-  border-bottom: 1px solid var(--gray-medium);
-  /* 🍓 BERRY FIX: เพิ่ม Blur Effect และดัน Z-index ให้สูงที่สุด (Feature 9) */
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(4px);
+/* Header Row: Corner Cell + Hour Track aligned 1:1 */
+.timeline-header-row {
+  display: flex;
   position: sticky;
   top: 0;
-  z-index: 30; 
+  z-index: 35;
+  background: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(6px);
+  border-bottom: 2px solid var(--gray-medium, #e2e8f0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
 }
 
-.hour-label {
-  padding: 0.75rem 0.5rem;
-  text-align: center;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--gray-dark);
-  border-right: 1px dashed var(--gray-medium);
-}
-.hour-label:last-child { border-right: none; }
-
-#timeline-grid { position: relative; padding-bottom: 1rem; }
-
-.timeline-row {
-  display: flex;
-  min-height: 60px;
-  border-bottom: 1px solid var(--gray-medium);
-}
-
-.vehicle-label {
-  width: 150px;
-  min-width: 150px;
-  padding: 1rem 0.75rem;
-  font-weight: 600;
-  background: white;
-  border-right: 1px solid var(--gray-medium);
+.timeline-corner-cell {
+  width: 160px;
+  min-width: 160px;
+  padding: 0.85rem 0.75rem;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--gray-dark, #4b5563);
+  background: #f8fafc;
+  border-right: 1px solid var(--gray-medium, #e2e8f0);
   position: sticky;
   left: 0;
-  /* 🍓 BERRY FIX: Z-index 20 ให้แกนรถอยู่เหนือแท่งงาน (Bar) แต่ต่ำกว่า Header เวลา */
-  z-index: 20; 
+  z-index: 40;
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.03);
 }
-.vehicle-label span:first-child { font-size: 1.2rem; }
+
+.timeline-hours-track {
+  flex: 1 1 auto;
+  min-width: 960px;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  position: relative;
+}
+
+.hour-tick {
+  padding: 0.75rem 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--gray-dark, #4b5563);
+  text-align: left;
+  position: relative;
+  border-right: 1px dashed var(--gray-medium, #e2e8f0);
+}
+
+.hour-tick span {
+  display: inline-block;
+  transform: translateX(-50%);
+  background: transparent;
+  padding: 0 4px;
+}
+
+.hour-tick:first-child span {
+  transform: none;
+  padding-left: 6px;
+}
+
+.hour-tick.hour-tick-end {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-right: none;
+}
+
+.hour-tick.hour-tick-end span {
+  position: absolute;
+  right: 6px;
+  top: 0.75rem;
+  transform: none;
+}
+
+#timeline-grid {
+  position: relative;
+  padding-bottom: 0.5rem;
+}
+
+.timeline-row {
+  display: flex;
+  min-height: 76px;
+  border-bottom: 1px solid var(--gray-medium, #e2e8f0);
+  transition: background 0.15s;
+}
+
+.timeline-row:hover {
+  background: rgba(248, 250, 252, 0.7);
+}
+
+.vehicle-label {
+  width: 160px;
+  min-width: 160px;
+  padding: 0.75rem 0.75rem;
+  background: #ffffff;
+  border-right: 1px solid var(--gray-medium, #e2e8f0);
+  position: sticky;
+  left: 0;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.02);
+}
+
+.vehicle-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.vehicle-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.vehicle-name {
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--dark, #1f2937);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vehicle-type {
+  font-size: 0.72rem;
+  color: var(--gray-dark, #4b5563);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .timeline-track {
   flex: 1 1 auto;
   position: relative;
-  min-width: 800px;
-  /* 🍓 BERRY FIX: สร้างเส้นไกด์ไลน์จางๆ ในพื้นที่ว่างช่วยให้ผู้ใช้กะเวลาได้ง่ายขึ้น */
+  min-width: 960px;
   background: repeating-linear-gradient(
     90deg,
     transparent,
     transparent calc(12.5% - 1px),
-    rgba(226, 232, 240, 0.4) 12.5%
-  ); 
+    #edf2f7 12.5%
+  );
 }
 
-.timeline-slots {
-  flex-grow: 1;
-  display: grid;
-  grid-template-columns: repeat(8, minmax(100px, 1fr));
-  position: relative;
+/* Empty vehicle lane: Available all day */
+.timeline-free-lane {
+  position: absolute;
+  inset: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: #15803d;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(240, 253, 244, 0.6),
+    rgba(240, 253, 244, 0.6) 12px,
+    rgba(220, 252, 231, 0.6) 12px,
+    rgba(220, 252, 231, 0.6) 24px
+  );
+  border: 1px dashed #86efac;
+  border-radius: 6px;
+  pointer-events: none;
 }
 
-.time-slot {
-  border-right: 1px dashed var(--gray-medium);
-  min-height: 60px;
+.free-indicator {
+  color: #16a34a;
+  font-size: 0.75rem;
 }
-.time-slot:last-child { border-right: none; }
 
-/* ===== Booking Card (Event Bar) ===== */
+/* ===== Event Bar (Booking Card) ===== */
 .timeline-booking {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  height: 64%; /* 🍓 เพิ่มความหนาขึ้นนิดนึงให้ทัชง่ายบนมือถือ */
-  min-width: 10px;
-  padding: 0.4rem 0.6rem;
-  border-radius: 6px;
-  color: white;
-  font-size: 0.8rem;
+  height: 82%;
+  min-width: 24px;
+  padding: 0.35rem 0.65rem;
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 0.78rem;
   font-weight: 600;
-
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-
   cursor: pointer;
-  transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), filter 0.2s, box-shadow 0.2s;
-  box-shadow: 0 3px 6px rgba(0,0,0,0.15);
-  border: 1px solid rgba(0,0,0,0.1);
-  z-index: 10; /* ต่ำกว่า Header และ Label รถ */
+  transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.2s;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
 }
 
-/* 🍓 BERRY FIX: Highlight Selected Job (Feature 8) */
-.timeline-booking:hover { 
-  transform: translateY(-50%) scale(1.02); 
-  z-index: 15; 
-  box-shadow: 0 8px 16px rgba(0,0,0,0.3);
-  filter: brightness(1.15);
+.timeline-booking:hover {
+  transform: translateY(-50%) scale(1.02);
+  z-index: 20;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+  filter: brightness(1.1);
 }
 
-.timeline-booking.approved { background: linear-gradient(135deg, var(--success), #14532D); }
-.timeline-booking.pending  { background: linear-gradient(135deg, var(--warning), #78350F); }
-.timeline-booking.rejected { background: linear-gradient(135deg, var(--danger),  #7F1D1D); }
-.timeline-booking.cancelled{ background: linear-gradient(135deg, #94A3B8,       #475569); }
+.timeline-booking:focus-visible {
+  outline: 2px solid var(--primary, #667eea);
+  outline-offset: 2px;
+}
 
-/* 🍓 BERRY FIX: Current Time Line (Feature 6) */
+.timeline-booking.approved { background: linear-gradient(135deg, #10B981 0%, #047857 100%); }
+.timeline-booking.pending  { background: linear-gradient(135deg, #F59E0B 0%, #B45309 100%); }
+.timeline-booking.rejected { background: linear-gradient(135deg, #EF4444 0%, #B91C1C 100%); }
+.timeline-booking.cancelled{ background: linear-gradient(135deg, #94A3B8 0%, #475569 100%); }
+
+.timeline-booking .booking-time {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  opacity: 0.95;
+  white-space: nowrap;
+}
+
+.timeline-booking .booking-title {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.25;
+}
+
+.timeline-booking .booking-meta {
+  font-size: 0.68rem;
+  opacity: 0.9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ===== Current Time Line ===== */
 .current-time-line {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 2px;
-  background-color: var(--danger);
-  z-index: 5; /* อยู่ใต้ Event Bar */
+  background-color: #dc2626;
+  z-index: 18;
   pointer-events: none;
 }
+
 .current-time-line::before {
-  content: ''; 
+  content: '';
   position: absolute;
-  top: -4px; 
+  top: -4px;
   left: -4px;
-  width: 10px; 
+  width: 10px;
   height: 10px;
-  background-color: var(--danger);
+  background-color: #dc2626;
   border-radius: 50%;
-  box-shadow: 0 0 4px rgba(220, 38, 38, 0.5);
+  box-shadow: 0 0 6px rgba(220, 38, 38, 0.8);
+}
+
+.current-time-badge {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .timeline-legend {
@@ -3490,7 +3661,7 @@ footer.footer .developer {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
 }
 
 .legend-color {
@@ -3500,53 +3671,32 @@ footer.footer .developer {
 }
 
 /* ===== Mobile-only (Timeline Optimization) ===== */
-@media (max-width: 768px){
-  /* ✅ กันหน้าเว็บเลื่อนแนวนอน */
-  html, body { overflow-x: hidden; }
-
-  /* ✅ ลดช่องซ้ายไม่ให้กินพื้นที่เกินไป */
-  .vehicle-label{
-    width: 110px; 
-    min-width: 110px;
-    padding: 0.75rem 0.5rem;
-  }
-  .vehicle-label span:first-child { font-size: 1rem; }
-
-  /* ✅ ลดความกว้าง track รวม ให้พอดีมือถือขึ้น (ลดภาระการปัดนิ้ว) */
-  .timeline-track{
-    min-width: 600px; 
+@media (max-width: 768px) {
+  .timeline-corner-cell,
+  .vehicle-label {
+    width: 120px;
+    min-width: 120px;
+    padding: 0.5rem 0.5rem;
   }
 
-  /* ✅ ไม่ให้การ์ดโดนตัดขอบตอนเลื่อน */
-  .timeline-booking{
-    padding: 0.4rem 0.4rem;
-    font-size: 0.75rem;
-    line-height: 1.2;
-    white-space: normal;   /* เปิดให้มีหลายบรรทัดในตัวการ์ด */
-    text-overflow: clip;   
-    max-width: 95%;        /* ป้องกันทะลุขอบขวา */
+  .vehicle-icon { font-size: 1.1rem; }
+  .vehicle-name { font-size: 0.8rem; }
+  .vehicle-type { font-size: 0.68rem; }
+
+  .timeline-hours-track,
+  .timeline-track {
+    min-width: 720px;
   }
 
-  /* ✅ ชื่องานโชว์ได้ 2 บรรทัด */
-  .timeline-booking .booking-title{
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow: hidden;
-    white-space: normal;
-    word-break: break-word;
-    font-size: 0.75rem;
+  .timeline-booking {
+    height: 76%;
+    min-width: 16px;
+    padding: 0.25rem 0.4rem;
   }
 
-  /* ✅ เวลา/ID ยังเป็นบรรทัดเดียว (กันรก) */
-  .timeline-booking .booking-time,
-  .timeline-booking .booking-meta{
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: 0.7rem;
-    opacity: 0.9;
-  }
+  .timeline-booking .booking-title { font-size: 0.72rem; }
+  .timeline-booking .booking-time { font-size: 0.65rem; }
+  .timeline-booking .booking-meta { display: none; }
 }
 
 /* ==================== PRINT STYLES ==================== */

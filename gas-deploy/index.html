@@ -654,7 +654,10 @@
     <div class="card">
         <div class="timeline-header">
             <button type="button" onclick="changeTimelineDate(-1)" class="btn btn-sm btn-primary">◀ วันก่อนหน้า</button>
-            <h3 id="timeline-date" class="timeline-title">🗓️ ไทม์ไลน์</h3>
+            <div class="timeline-date-container">
+                <h3 id="timeline-date" class="timeline-title">🗓️ ไทม์ไลน์</h3>
+                <button type="button" id="btn-timeline-today" onclick="changeTimelineDate(0, true)" class="btn btn-xs btn-primary-light" style="display:none;">วันนี้</button>
+            </div>
             <button type="button" onclick="changeTimelineDate(1)" class="btn btn-sm btn-primary">วันถัดไป ▶</button>
         </div>
 
@@ -668,15 +671,21 @@
         </div>
 
         <div class="timeline-container">
-            <div class="timeline-hours">
-                <div class="hour-label">06:00-08:00</div>
-                <div class="hour-label">08:00-10:00</div>
-                <div class="hour-label">10:00-12:00</div>
-                <div class="hour-label">12:00-14:00</div>
-                <div class="hour-label">14:00-16:00</div>
-                <div class="hour-label">16:00-18:00</div>
-                <div class="hour-label">18:00-20:00</div>
-                <div class="hour-label">20:00-22:00</div>
+            <div class="timeline-header-row">
+                <div class="timeline-corner-cell">
+                    <span>🚐 ยานพาหนะ</span>
+                </div>
+                <div id="timeline-hours-track" class="timeline-hours-track">
+                    <div class="hour-tick"><span>06:00</span></div>
+                    <div class="hour-tick"><span>08:00</span></div>
+                    <div class="hour-tick"><span>10:00</span></div>
+                    <div class="hour-tick"><span>12:00</span></div>
+                    <div class="hour-tick"><span>14:00</span></div>
+                    <div class="hour-tick"><span>16:00</span></div>
+                    <div class="hour-tick"><span>18:00</span></div>
+                    <div class="hour-tick"><span>20:00</span></div>
+                    <div class="hour-tick hour-tick-end"><span>22:00</span></div>
+                </div>
             </div>
             <div id="timeline-grid" class="timeline-grid"></div>
         </div>
@@ -697,6 +706,10 @@
             <div class="legend-item" title="งานที่ถูกยกเลิก">
                 <div class="legend-color" style="background: linear-gradient(135deg, #94A3B8, #475569);"></div>
                 <span>ยกเลิก</span>
+            </div>
+            <div class="legend-item" title="เวลาปัจจุบัน">
+                <div class="legend-line" style="width: 14px; height: 3px; background-color: var(--danger); border-radius: 2px;"></div>
+                <span>เวลาปัจจุบัน</span>
             </div>
         </div>
     </div>
