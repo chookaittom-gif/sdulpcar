@@ -150,14 +150,7 @@
                     <button onclick="changeMonth(1)" class="btn btn-sm btn-primary">▶</button>
                 </div>
                 
-                <!-- 🍓 BERRY FIX: จัดกลุ่ม KPI Bar และปุ่ม Radar ให้อยู่ระดับเดียวกันและ Responsive -->
-                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 1rem;">
-                    <div id="calendar-kpi-bar" class="calendar-kpi-bar" aria-live="polite" style="margin-bottom: 0; flex: 1 1 auto; min-width: 0;"></div>
-                    <button id="radar-btn-inline" class="btn btn-primary" type="button" onclick="toggleLiveRadar()" title="เรดาร์สถานะรถและคนขับ" style="flex: 0 0 auto; height: 44px; display: flex; align-items: center; gap: 8px; border-radius: 12px; box-shadow: 0 4px 12px rgba(59,130,246,0.3);">
-                        <span style="font-size: 1.2rem;" aria-hidden="true">📡</span>
-                        <span style="font-weight: 700;">Live Radar</span>
-                    </button>
-                </div>
+                <div id="calendar-kpi-bar" class="calendar-kpi-bar" aria-live="polite"></div>
 
                 <details class="cal-legend">
                     <summary>สัญลักษณ์สีสถานะ</summary>
