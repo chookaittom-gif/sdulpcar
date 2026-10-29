@@ -7998,6 +7998,42 @@ function renderTimelineGrid(bookings, selectedPlate, allPlates){
 
   // 4. คำนวณเวลาปัจจุบันถ้าวันที่ที่เลือกคือวันนี้
   const curDate = window.currentTimelineDate || new Date();
+  const curDateISO = dateToISO(curDate);
+  const normISO = (d) => {
+    let str = String(d || '').trim().split('T')[0].split(' ')[0];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      let y = parseInt(str.substring(0, 4), 10);
+      if (y > 2500) str = (y - 543) + str.substring(4);
+      return str;
+    }
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(str)) {
+      let p = str.split('/');
+      let y = parseInt(p[2], 10);
+      if (y > 2500) y -= 543;
+      return `${y}-${p[1]}-${p[0]}`;
+    }
+    return str || curDateISO;
+  };
+  const getDayBounds = (b) => {
+    const bStartISO = normISO(b.startDate);
+    const bEndISO = normISO(b.endDate || b.startDate);
+    const rawStart = b.startTime || '06:00';
+    const rawEnd = b.endTime || b.startTime || '22:00';
+    const startsBeforeToday = bStartISO < curDateISO;
+    const endsAfterToday = bEndISO > curDateISO;
+    const sMin = startsBeforeToday ? TL_START_MIN : clamp(timeToMin(rawStart), TL_START_MIN, TL_END_MIN);
+    const eMin = endsAfterToday ? TL_END_MIN : clamp(timeToMin(rawEnd), TL_START_MIN, TL_END_MIN);
+    let timeLabel = `${rawStart}-${rawEnd}`;
+    if (startsBeforeToday && endsAfterToday) {
+      timeLabel = 'ตลอดวัน (งานข้ามวัน)';
+    } else if (!startsBeforeToday && endsAfterToday) {
+      timeLabel = `${rawStart}-24:00 (ข้ามวัน)`;
+    } else if (startsBeforeToday && !endsAfterToday) {
+      timeLabel = `00:00-${rawEnd} (วันกลับ)`;
+    }
+    const fullRange = (bStartISO !== bEndISO) ? `${bStartISO} ${rawStart} ถึง ${bEndISO} ${rawEnd}` : `${rawStart}-${rawEnd}`;
+    return { sMin, eMin, timeLabel, fullRange };
+  };
   const todayDate = new Date();
   const isToday = (curDate.getFullYear() === todayDate.getFullYear() &&
                    curDate.getMonth() === todayDate.getMonth() &&
@@ -8019,11 +8055,9 @@ function renderTimelineGrid(bookings, selectedPlate, allPlates){
   targetPlates.forEach(plate => {
     const list = byPlate.get(plate) || [];
     list.sort((a,b)=>{
-      const as = timeToMin(a.startTime), bs = timeToMin(b.startTime);
-      if (as !== bs) return as - bs;
-      const ae = timeToMin(a.endTime || a.startTime);
-      const be = timeToMin(b.endTime || b.startTime);
-      return ae - be;
+      const ba = getDayBounds(a), bb = getDayBounds(b);
+      if (ba.sMin !== bb.sMin) return ba.sMin - bb.sMin;
+      return ba.eMin - bb.eMin;
     });
 
     const carType = (list[0] && list[0].carType) ? list[0].carType : '';
@@ -8050,9 +8084,9 @@ function renderTimelineGrid(bookings, selectedPlate, allPlates){
               <span class="free-text">ว่างตลอดทั้งวัน (พร้อมปฏิบัติงาน)</span>
             </div>
           ` : list.map(b => {
-            const sMin = clamp(timeToMin(b.startTime), TL_START_MIN, TL_END_MIN);
-            const rawEnd = b.endTime || b.startTime;
-            const eMin = clamp(timeToMin(rawEnd), TL_START_MIN, TL_END_MIN);
+            const bounds = getDayBounds(b);
+            const sMin = bounds.sMin;
+            const eMin = bounds.eMin;
             const leftPct = ((sMin - TL_START_MIN) / TL_SPAN_MIN) * 100;
             const widthPct = Math.max(3.2, ((Math.max(eMin, sMin + 25) - sMin) / TL_SPAN_MIN) * 100);
 
@@ -8061,7 +8095,7 @@ function renderTimelineGrid(bookings, selectedPlate, allPlates){
             const statusTh = statusMap[cls] || 'รออนุมัติ';
             const dest = toStr(b.destination) || toStr(b.purpose) || 'ภารกิจ';
             const driver = toStr(b.driver);
-            const title = `${escapeHtml(b.startTime)}-${escapeHtml(rawEnd)} ${escapeHtml(dest)} [${statusTh}]`;
+            const title = `${escapeHtml(bounds.fullRange)} ${escapeHtml(dest)} [${statusTh}]`;
 
             return `
               <div class="timeline-booking ${cls}" title="${title}"
@@ -8069,7 +8103,7 @@ function renderTimelineGrid(bookings, selectedPlate, allPlates){
                    onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();if(typeof showActivityDetails === 'function') showActivityDetails('${escapeHtml(b.bookingId || '')}');}"
                    role="button" tabindex="0"
                    style="left:${leftPct}%; width:${widthPct}%;">
-                <div class="booking-time">⏰ ${escapeHtml(b.startTime)}-${escapeHtml(rawEnd)}</div>
+                <div class="booking-time">⏰ ${escapeHtml(bounds.timeLabel)}</div>
                 <div class="booking-title">${escapeHtml(dest)}</div>
                 ${driver ? `<div class="booking-meta">👤 ${escapeHtml(driver)}</div>` : ''}
               </div>`;
