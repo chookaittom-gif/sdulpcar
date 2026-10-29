@@ -3985,7 +3985,8 @@ function renderCalendar(year, month) {
     }
 
     // 🍓 BERRY FIX: ระบบป้องกันการ Render ซ้ำซ้อน (Throttle Lock 350ms)
-    const renderKey = `${year}-${month}`;
+    const activeFilterKey = window.calendarStatusFilter || null;
+    const renderKey = `${year}-${month}-${activeFilterKey || 'all'}`;
     const nowMs = Date.now();
     if (renderCalendar.__lastRun && renderCalendar.__lastKey === renderKey && (nowMs - renderCalendar.__lastRun < 350)) {
         console.log('⚡ [Calendar] Skipped redundant render (Throttle Lock)');
@@ -4047,14 +4048,35 @@ function renderCalendar(year, month) {
 
     const includeClosed = document.getElementById('chk-show-closed') ? document.getElementById('chk-show-closed').checked : false;
 
-    const monthEvents = calendarRows
+    // รายการทั้งหมดของเดือนนี้สำหรับคำนวณ KPI Bar
+    const allMonthRows = calendarRows.filter(item => {
+        const sMs = Number(item?.sMs || 0);
+        const eMs = Number(item?.eMs || 0);
+        return sMs > 0 && eMs > 0 && !(eMs < monthStartMs || sMs > monthEndMs);
+    });
+
+    const monthEvents = allMonthRows
         .filter(item => {
-            const sMs = Number(item?.sMs || 0);
-            const eMs = Number(item?.eMs || 0);
             const st = normalizeClientStatus(item?.status || 'pending');
             const isItemClosed = item?.isClosed || st === 'closed' || (item?.blockStatus && String(item?.blockStatus).toLowerCase() === 'closed');
             if (isItemClosed && !includeClosed) return false;
-            return sMs > 0 && eMs > 0 && !(eMs < monthStartMs || sMs > monthEndMs);
+
+            if (activeFilterKey) {
+                if (activeFilterKey === 'approved') {
+                    if (st !== 'approved' && st !== 'driver_special_approved') return false;
+                } else if (activeFilterKey === 'pending') {
+                    if (st !== 'pending') return false;
+                } else if (activeFilterKey === 'rejected') {
+                    if (st !== 'rejected') return false;
+                } else if (activeFilterKey === 'cancelled') {
+                    if (st !== 'cancelled') return false;
+                }
+            } else {
+                // ค่าเริ่มต้น: ซ่อนรายการยกเลิก (cancelled) และไม่อนุมัติ (rejected) ออกจากช่องปฏิทิน เพื่อไม่ให้แย่งพื้นที่รายการที่เดินทางจริง
+                if (st === 'cancelled' || st === 'rejected') return false;
+            }
+
+            return true;
         })
         .sort((a, b) => {
             const aMs = Number(a?.sMs || 0);
@@ -4262,7 +4284,7 @@ function renderCalendar(year, month) {
 
     normalizeCalendarInteractiveState();
 
-    const kpiEvents = monthEvents.map(m => m?.data || m);
+    const kpiEvents = allMonthRows.map(m => m?.data || m);
 
     requestAnimationFrame(function () {
         // 🍓 [BERRY FIX] คืน grid-level opacity/pointerEvents ก่อนทุกอย่าง
@@ -4343,28 +4365,28 @@ function renderCalendarKPI(opts = {}) {
     const titlePending = `รออนุมัติ: ${totalPending}`;
     const titleApproved = counts.driver_special_approved > 0 ? `อนุมัติ: ${counts.approved} | งานด่วน: ${counts.driver_special_approved}` : `อนุมัติแล้ว`;
 
+    const activeFilter = window.calendarStatusFilter || null;
+
     bar.innerHTML = `
-        <button type="button" class="kpi-chip kpi-approved" data-k="approved" title="${titleApproved}" aria-pressed="false"><span class="kpi-label">อนุมัติ</span><span class="kpi-num">${totalApproved}</span></button>
-        <button type="button" class="kpi-chip kpi-pending" data-k="pending" title="${titlePending}" aria-pressed="false"><span class="kpi-label">รออนุมัติ</span><span class="kpi-num">${totalPending}</span></button>
-        <button type="button" class="kpi-chip kpi-rejected" data-k="rejected" title="ไม่อนุมัติ" aria-pressed="false"><span class="kpi-label">ไม่อนุมัติ</span><span class="kpi-num">${counts.rejected}</span></button>
-        <button type="button" class="kpi-chip kpi-cancelled" data-k="cancelled" title="ยกเลิก" aria-pressed="false"><span class="kpi-label">ยกเลิก</span><span class="kpi-num">${counts.cancelled}</span></button>
-        <button type="button" class="kpi-chip kpi-total" data-k="total" title="ทั้งหมดเดือนนี้" aria-pressed="false"><span class="kpi-label">ทั้งหมด</span><span class="kpi-num">${total}</span></button>
+        <button type="button" class="kpi-chip kpi-approved ${activeFilter === 'approved' ? 'active' : ''}" data-k="approved" title="${titleApproved}" aria-pressed="${activeFilter === 'approved'}"><span class="kpi-label">อนุมัติ</span><span class="kpi-num">${totalApproved}</span></button>
+        <button type="button" class="kpi-chip kpi-pending ${activeFilter === 'pending' ? 'active' : ''}" data-k="pending" title="${titlePending}" aria-pressed="${activeFilter === 'pending'}"><span class="kpi-label">รออนุมัติ</span><span class="kpi-num">${totalPending}</span></button>
+        <button type="button" class="kpi-chip kpi-rejected ${activeFilter === 'rejected' ? 'active' : ''}" data-k="rejected" title="ไม่อนุมัติ" aria-pressed="${activeFilter === 'rejected'}"><span class="kpi-label">ไม่อนุมัติ</span><span class="kpi-num">${counts.rejected}</span></button>
+        <button type="button" class="kpi-chip kpi-cancelled ${activeFilter === 'cancelled' ? 'active' : ''}" data-k="cancelled" title="ยกเลิก" aria-pressed="${activeFilter === 'cancelled'}"><span class="kpi-label">ยกเลิก</span><span class="kpi-num">${counts.cancelled}</span></button>
+        <button type="button" class="kpi-chip kpi-total ${!activeFilter ? 'active' : ''}" data-k="total" title="ทั้งหมดเดือนนี้" aria-pressed="${!activeFilter}"><span class="kpi-label">ทั้งหมด</span><span class="kpi-num">${total}</span></button>
     `;
 
     bar.onclick = (e) => {
         const chip = e.target.closest('.kpi-chip');
         if (!chip) return;
-        const isActivating = !chip.classList.contains('active');
-        bar.querySelectorAll('.kpi-chip').forEach(c => {
-            c.classList.remove('active');
-            c.setAttribute('aria-pressed', 'false');
-        });
-        if (isActivating) {
-            chip.classList.add('active');
-            chip.setAttribute('aria-pressed', 'true');
-            highlightCalendarByStatus(chip.dataset.k);
+        const key = chip.dataset.k;
+        const isCurrentActive = chip.classList.contains('active') && key !== 'total';
+        if (isCurrentActive || key === 'total') {
+            window.calendarStatusFilter = null;
         } else {
-            highlightCalendarByStatus(null);
+            window.calendarStatusFilter = key;
+        }
+        if (typeof renderCalendar === 'function' && window.calendarState) {
+            renderCalendar(window.calendarState.currentYear, window.calendarState.currentMonth);
         }
     };
 }
