@@ -10861,7 +10861,14 @@ window.toggleLiveRadar = function() {
     const drawer = document.getElementById('radar-drawer');
     const overlay = document.getElementById('radar-overlay');
     const fab = document.getElementById('radar-fab');
+    const headerBtn = document.getElementById('radar-btn-header');
+    const inlineBtn = document.getElementById('radar-btn-inline');
     const closeButton = drawer ? drawer.querySelector('.radar-close') : null;
+    const setRadarBtnsDisabled = function(val) {
+        if (fab) fab.disabled = val;
+        if (headerBtn) headerBtn.disabled = val;
+        if (inlineBtn) inlineBtn.disabled = val;
+    };
 
     if (!drawer || !overlay) {
         console.error('[Radar] drawer/overlay not found');
@@ -10880,7 +10887,7 @@ window.toggleLiveRadar = function() {
         drawer.removeAttribute('inert');
         overlay.setAttribute('aria-hidden', 'false');
 
-        if (fab) fab.disabled = true;
+        setRadarBtnsDisabled(true);
         renderRadarMeta({ serverNow: 'กำลังโหลด...', timezone: 'Asia/Bangkok' });
 
         window.requestAnimationFrame(function() {
@@ -10900,9 +10907,9 @@ window.toggleLiveRadar = function() {
     drawer.setAttribute('aria-modal', 'false');
     drawer.setAttribute('inert', '');
     overlay.setAttribute('aria-hidden', 'true');
-    if (fab) fab.disabled = false;
+    setRadarBtnsDisabled(false);
 
-    const returnFocus = drawer.__returnFocus || fab;
+    const returnFocus = drawer.__returnFocus || headerBtn || inlineBtn || fab;
     if (returnFocus && typeof returnFocus.focus === 'function' && document.contains(returnFocus)) {
         window.requestAnimationFrame(function() { returnFocus.focus(); });
     }

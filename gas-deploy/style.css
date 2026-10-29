@@ -617,6 +617,18 @@ main.container {
 .btn-success { background: #15803d; color: white; border-color: #166534; }
 .btn-warning { background: var(--warning); color: white; }
 .btn-danger { background: var(--danger); color: white; }
+.btn-radar {
+  background: rgba(255, 255, 255, 0.95);
+  color: #1e40af;
+  border: 1px solid rgba(191, 219, 254, 0.85);
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+.btn-radar:hover {
+  background: #ffffff;
+  color: #1d4ed8;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+}
 
 .btn-sm {
   padding: 0.5rem 1rem;
